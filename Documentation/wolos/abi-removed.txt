@@ -1,0 +1,3 @@
+# WolKernel userspace interfaces removed versus Arch's stock kernel (read by `wol doctor`).
+# Format: <kind> <name> <reason>
+config X86_X32_ABI legacy
