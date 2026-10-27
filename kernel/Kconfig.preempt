@@ -198,3 +198,12 @@ config SCHED_CLASS_EXT
 config PREFERRED_CPU
 	bool
 	depends on SMP && PARAVIRT
+
+config WOLOS_HINTS
+	bool "WolOS foreground hint (/sys/kernel/wolos)"
+	depends on SYSFS
+	default y
+	help
+	  Lets the WolOS session daemon publish the frontmost application
+	  (/sys/kernel/wolos/foreground_pid) so drivers can boost it only.
+	  QoS classes themselves use sched_setattr(2), see <linux/wolos.h>.
