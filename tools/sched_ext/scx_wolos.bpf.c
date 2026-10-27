@@ -42,8 +42,8 @@ static __always_inline int task_class(const struct task_struct *p)
 
 	if (p->policy == SCHED_IDLE_POLICY)
 		return C_BACKGROUND;
-	umin = BPF_CORE_READ_BITFIELD(&p->uclamp_req[0], value);
-	umax = BPF_CORE_READ_BITFIELD(&p->uclamp_req[1], value);
+	umin = p->uclamp_req[0].value;
+	umax = p->uclamp_req[1].value;
 	if (umin >= 768)
 		return C_INTERACTIVE;
 	if (umin >= 384)
