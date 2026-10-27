@@ -1,0 +1,18 @@
+[Unit]
+Description=WolOS QoS scheduler (sched_ext); EEVDF runs whenever it is not attached
+ConditionPathExists=/sys/kernel/sched_ext/state
+After=local-fs.target
+
+[Service]
+ExecStart=/usr/bin/scx_wolos
+Restart=on-failure
+RestartSec=2
+# Five failures in a minute: stay on EEVDF until next boot.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+Nice=-20
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=1
+
+[Install]
+WantedBy=multi-user.target
