@@ -4,6 +4,8 @@
  */
 
 #include <linux/string_helpers.h>
+#include <linux/wolos.h>
+#include <linux/moduleparam.h>
 
 #include <drm/intel/display_parent_interface.h>
 #include <drm/intel/i915_drm.h>
@@ -1015,6 +1017,33 @@ void intel_rps_dec_waiters(struct intel_rps *rps)
 		intel_guc_slpc_dec_waiters(slpc);
 	} else {
 		atomic_dec(&rps->num_waiters);
+	}
+}
+
+/*
+ * WolKernel: frame-deadline boost and foreground-only waitboost.
+ * i915.wol_waitboost: 0 never, 1 every waiter (upstream), 2 frontmost app only (default).
+ * Frontmost app = /sys/kernel/wolos/foreground_pid; 0 (unknown) behaves as 1.
+ * i915.wol_deadline_boost: 1 = boost a request whose fence got a deadline (next vblank).
+ */
+int i915_wol_waitboost = 2;
+module_param_named(wol_waitboost, i915_wol_waitboost, int, 0644);
+MODULE_PARM_DESC(wol_waitboost, "Waitboost: 0 off, 1 all waiters, 2 foreground app only (default)");
+int i915_wol_deadline_boost = 1;
+module_param_named(wol_deadline_boost, i915_wol_deadline_boost, int, 0644);
+MODULE_PARM_DESC(wol_deadline_boost, "Boost requests whose fence gets a deadline (default 1)");
+
+bool intel_rps_wol_waiter_may_boost(void)
+{
+	int fg = wolos_foreground_tgid();
+
+	switch (READ_ONCE(i915_wol_waitboost)) {
+	case 0:
+		return false;
+	case 1:
+		return true;
+	default:
+		return fg <= 0 || task_tgid_nr(current) == fg;
 	}
 }
 

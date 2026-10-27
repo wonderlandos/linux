@@ -172,6 +172,22 @@ static void i915_fence_release(struct dma_fence *fence)
 	kmem_cache_free(slab_requests, rq);
 }
 
+/*
+ * WolOS: the atomic commit (drm_atomic_helper_wait_for_fences) and SYNC_IOC_SET_DEADLINE set the
+ * next vblank as deadline. A request still running then would miss the frame: boost it now
+ * instead of waiting for RPS autotuning (tens of ms).
+ */
+static void i915_fence_set_deadline(struct dma_fence *fence, ktime_t deadline)
+{
+	struct i915_request *rq = to_request(fence);
+
+	if (!READ_ONCE(i915_wol_deadline_boost))
+		return;
+	if (i915_request_completed(rq) || i915_request_has_waitboost(rq))
+		return;
+	intel_rps_boost(rq);
+}
+
 const struct dma_fence_ops i915_fence_ops = {
 	.get_driver_name = i915_fence_get_driver_name,
 	.get_timeline_name = i915_fence_get_timeline_name,
@@ -179,6 +195,7 @@ const struct dma_fence_ops i915_fence_ops = {
 	.signaled = i915_fence_signaled,
 	.wait = i915_fence_wait,
 	.release = i915_fence_release,
+	.set_deadline = i915_fence_set_deadline,
 };
 
 static void irq_execute_cb(struct irq_work *wrk)
@@ -2042,7 +2059,8 @@ long i915_request_wait_timeout(struct i915_request *rq,
 	 * but at a cost of spending more power processing the workload
 	 * (bad for battery).
 	 */
-	if (flags & I915_WAIT_PRIORITY && !i915_request_started(rq))
+	if (flags & I915_WAIT_PRIORITY && !i915_request_started(rq) &&
+	    intel_rps_wol_waiter_may_boost())
 		intel_rps_boost(rq);
 
 	wait.tsk = current;
