@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <linux/moduleparam.h>
+#include <linux/sched/clock.h>
 #include <linux/plist.h>
 #include <linux/sched/task.h>
 #include <linux/sched/signal.h>
@@ -367,6 +369,30 @@ static long futex_wait_restart(struct restart_block *restart);
  * @q:		the futex_q to queue up on
  * @timeout:	the prepared hrtimer_sleeper, or null for no timeout
  */
+/*
+ * WolKernel: bounded spin before sleeping in FUTEX_WAIT. Most lock hand-offs
+ * between game/engine threads complete within a few microseconds, which is
+ * cheaper than a sleep plus wakeup IPI. 0 disables. futex.spin_ns=N on the
+ * command line or /sys/module/futex/parameters/spin_ns at runtime.
+ */
+#undef MODULE_PARAM_PREFIX
+#define MODULE_PARAM_PREFIX "futex."
+static unsigned int futex_spin_ns __read_mostly = 4000;
+module_param_named(spin_ns, futex_spin_ns, uint, 0644);
+
+static void futex_spin_wait(struct futex_q *q)
+{
+	unsigned int ns = READ_ONCE(futex_spin_ns);
+	u64 end;
+
+	if (!ns || num_online_cpus() < 2)
+		return;
+	end = local_clock() + ns;
+	while (!plist_node_empty(&q->list) && !need_resched() &&
+	       !signal_pending(current) && local_clock() < end)
+		cpu_relax();
+}
+
 void futex_do_wait(struct futex_q *q, struct hrtimer_sleeper *timeout)
 {
 	/* Arm the timer */
@@ -383,6 +409,7 @@ void futex_do_wait(struct futex_q *q, struct hrtimer_sleeper *timeout)
 		 * flagged for rescheduling. Only call schedule if there
 		 * is no timeout, or if it has yet to expire.
 		 */
+		futex_spin_wait(q);
 		if (!timeout || hrtimer_sleeper_task_get(timeout))
 			schedule();
 	}
