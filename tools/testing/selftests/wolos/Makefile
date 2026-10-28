@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
 CFLAGS += -O2 -Wall -pthread
-TEST_GEN_PROGS := futex_pingpong
+TEST_GEN_PROGS := futex_pingpong fg_hints
 
 include ../lib.mk
