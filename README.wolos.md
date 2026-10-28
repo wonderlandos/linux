@@ -34,6 +34,9 @@ It is upstream Linux with a small set of desktop and gaming patches, a tuned con
 | ADIOS 3.3.0 I/O scheduler (CachyOS) | Adaptive-deadline MQ scheduler, default for blk-mq devices. | `echo mq-deadline > /sys/block/<dev>/queue/scheduler`, `CONFIG_MQ_IOSCHED_ADIOS=n` |
 | sched: BORE (CachyOS bore-cachy) | Burst-aware weighting on top of EEVDF; also marks futex waiters. | `sysctl kernel.sched_bore=0`, `CONFIG_SCHED_BORE=n` |
 | mm/swap: configurable default swap readahead | `vm.page-cluster` boot default from `CONFIG_SWAP_PAGE_CLUSTER_DEFAULT`, 0 (one page) with `CONFIG_CACHY`: on zram each read-ahead page is a decompression the faulting task waits for (CachyOS ships the same value as a sysctl). | `sysctl vm.page-cluster=3` |
+| wolos: uclamp_min floor for the frontmost app | `foreground_uclamp_min` (0..1024) raises the effective `uclamp_min` of every thread of `foreground_pid` in `uclamp_eff_get()`; schedutil and EAS see it, per-thread QoS clamps are never lowered. Thread-group performance hint after XNU's CLPC design (reimplemented, no APSL code). ABI version 3. | `echo 0 > /sys/kernel/wolos/foreground_uclamp_min` (default) |
+| wolos: per-tier timer slack for the frontmost app | `foreground_timerslack_ns` sets the frontmost app's thread slack (0 = exact expiry for frame pacing and Wine `Sleep`), restored on leaving; QoS-tier timer leeway after XNU's coalescing tiers. | `echo -1 > /sys/kernel/wolos/foreground_timerslack_ns` (default) |
+| selftests/wolos: fg_hints | Checks both knobs above (root). | n/a (test) |
 | selftests/wolos: futex_pingpong | FUTEX_WAIT/WAKE hand-off round trip, cross- and same-CPU; measures `futex.spin_ns`. Stock 7.0 baseline: 2.5 us cross-CPU, 1.3 us same-CPU. | n/a (test) |
 | drm/amd: AMD_PRIVATE_COLOR in Kconfig (CachyOS) | Plane color/HDR properties for gamescope. | `CONFIG_AMD_PRIVATE_COLOR=n` |
 
@@ -54,7 +57,7 @@ CI turns it on once both builds pass the same sysfs test; then the C file goes.
 Image items: `vm.swappiness=180` with zram; zram-generator `compression-algorithm = lz4 (type=idle) zstd(level=3)` for recompression, `writeback-device` on a swap partition if present; btrfs fstab options below.
 btrfs: no carried patches. `space_cache=v2` and `discard=async` (on SSDs with discard) are upstream defaults since 5.15/6.2; per-subvolume read-policy balancing needs `BTRFS_EXPERIMENTAL` and stays off.
 
-`vm.max_map_count=1048576`, TCP fastopen (`net.ipv4.tcp_fastopen=3`) and larger socket buffers are sysctls (image). App-nap style freezing uses the cgroup v2 freezer from the session daemon. `background_timerslack_ns` is written by the session daemon.
+`vm.max_map_count=1048576`, TCP fastopen (`net.ipv4.tcp_fastopen=3`) and larger socket buffers are sysctls (image). App-nap style freezing uses the cgroup v2 freezer from the session daemon. `background_timerslack_ns` is written by the session daemon; it also writes `foreground_uclamp_min=512` and `foreground_timerslack_ns=0` on AC power (`256`/`-1` on battery).
 
 ## QoS interface
 
