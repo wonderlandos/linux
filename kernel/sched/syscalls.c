@@ -9,6 +9,7 @@
  */
 #include <linux/sched.h>
 #include <linux/cpuset.h>
+#include <linux/wolos.h>
 #include <linux/sched/debug.h>
 
 #include <uapi/linux/sched/types.h>
@@ -242,6 +243,8 @@ static void __setscheduler_params(struct task_struct *p,
 		const struct sched_attr *attr)
 {
 	int policy = attr->sched_policy;
+	int old_policy = p->policy;
+	u64 bg_slack;
 
 	if (policy == SETPARAM_POLICY)
 		policy = p->policy;
@@ -256,7 +259,11 @@ static void __setscheduler_params(struct task_struct *p,
 	/* rt-policy tasks do not have a timerslack */
 	if (rt_or_dl_task_policy(p)) {
 		p->timer_slack_ns = 0;
-	} else if (p->timer_slack_ns == 0) {
+	} else if (policy == SCHED_IDLE &&
+		   (bg_slack = wolos_background_timerslack_ns())) {
+		/* WolOS background QoS: coalesce timer wakeups */
+		p->timer_slack_ns = max(p->default_timer_slack_ns, bg_slack);
+	} else if (p->timer_slack_ns == 0 || old_policy == SCHED_IDLE) {
 		/* when switching back to non-rt policy, restore timerslack */
 		p->timer_slack_ns = p->default_timer_slack_ns;
 	}

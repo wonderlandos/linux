@@ -8,6 +8,7 @@
 #include <linux/kstrtox.h>
 #include <linux/export.h>
 #include <linux/init.h>
+#include <linux/time64.h>
 #include <linux/wolos.h>
 
 static int wolos_fg_tgid;
@@ -17,6 +18,13 @@ int wolos_foreground_tgid(void)
 	return READ_ONCE(wolos_fg_tgid);
 }
 EXPORT_SYMBOL_GPL(wolos_foreground_tgid);
+
+static u64 wolos_bg_slack_ns;
+
+u64 wolos_background_timerslack_ns(void)
+{
+	return READ_ONCE(wolos_bg_slack_ns);
+}
 
 static ssize_t abi_version_show(struct kobject *k, struct kobj_attribute *a, char *buf)
 {
@@ -40,12 +48,36 @@ static ssize_t foreground_pid_store(struct kobject *k, struct kobj_attribute *a,
 	return n;
 }
 
+static ssize_t background_timerslack_ns_show(struct kobject *k, struct kobj_attribute *a,
+					     char *buf)
+{
+	return sysfs_emit(buf, "%llu\n", wolos_background_timerslack_ns());
+}
+
+/* Applies to threads that enter SCHED_IDLE after the write. Capped at 1 s. */
+static ssize_t background_timerslack_ns_store(struct kobject *k, struct kobj_attribute *a,
+					      const char *buf, size_t n)
+{
+	u64 ns;
+	int err = kstrtou64(buf, 10, &ns);
+
+	if (err)
+		return err;
+	if (ns > NSEC_PER_SEC)
+		return -EINVAL;
+	WRITE_ONCE(wolos_bg_slack_ns, ns);
+	return n;
+}
+
 static struct kobj_attribute abi_version_attr = __ATTR_RO(abi_version);
 static struct kobj_attribute foreground_pid_attr = __ATTR_RW_MODE(foreground_pid, 0644);
+static struct kobj_attribute background_timerslack_ns_attr =
+	__ATTR_RW_MODE(background_timerslack_ns, 0644);
 
 static struct attribute *wolos_attrs[] = {
 	&abi_version_attr.attr,
 	&foreground_pid_attr.attr,
+	&background_timerslack_ns_attr.attr,
 	NULL,
 };
 
