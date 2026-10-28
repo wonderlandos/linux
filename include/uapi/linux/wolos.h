@@ -9,6 +9,8 @@
  *     SCHED_IDLE (WOLOS_QOS_BACKGROUND) threads so their wakeups coalesce; 0 = off
  * /sys/kernel/wolos/foreground_uclamp_min (rw, root, v3) uclamp_min floor for all
  *     threads of foreground_pid (0..1024); 0 = off
+ * /sys/kernel/wolos/foreground_timerslack_ns (rw, root, v3) timer slack of the
+ *     frontmost app's threads (0..1e9); -1 = off
  */
 #ifndef _UAPI_LINUX_WOLOS_H
 #define _UAPI_LINUX_WOLOS_H
