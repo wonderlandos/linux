@@ -87,6 +87,7 @@
 #include <trace/events/ipi.h>
 #undef CREATE_TRACE_POINTS
 
+#include <linux/wolos.h>
 #include "sched.h"
 #include "stats.h"
 
@@ -1740,6 +1741,17 @@ uclamp_eff_get(struct task_struct *p, enum uclamp_id clamp_id)
 	struct uclamp_se uc_req = uclamp_tg_restrict(p, clamp_id);
 	struct uclamp_se uc_max = uclamp_default[clamp_id];
 
+	/* WolOS: the frontmost app gets at least foreground_uclamp_min */
+	if (clamp_id == UCLAMP_MIN) {
+		unsigned int boost = wolos_foreground_uclamp_min();
+
+		if (unlikely(boost) && uc_req.value < boost &&
+		    !(p->flags & PF_KTHREAD) && p->tgid == wolos_foreground_tgid()) {
+			uc_req.value = boost;
+			uc_req.bucket_id = uclamp_bucket_id(boost);
+		}
+	}
+
 	/* System default restrictions always apply */
 	if (unlikely(uc_req.value > uc_max.value))
 		return uc_max;
@@ -1971,6 +1983,28 @@ uclamp_update_active(struct task_struct *p)
 	task_rq_unlock(rq, p, &rf);
 }
 
+#ifdef CONFIG_WOLOS_HINTS
+/* Re-evaluate the clamps of every runnable thread of @tgid (foreground switch). */
+void wolos_uclamp_refresh_tgid(int tgid)
+{
+	struct task_struct *p, *t;
+
+	might_sleep();
+	if (tgid <= 0)
+		return;
+	if (wolos_foreground_uclamp_min())
+		static_branch_enable(&sched_uclamp_used);
+	else if (!static_branch_likely(&sched_uclamp_used))
+		return;
+	rcu_read_lock();
+	p = find_task_by_pid_ns(tgid, &init_pid_ns);
+	if (p)
+		for_each_thread(p, t)
+			uclamp_update_active(t);
+	rcu_read_unlock();
+}
+#endif
+
 #ifdef CONFIG_UCLAMP_TASK_GROUP
 static inline void
 uclamp_update_active_tasks(struct cgroup_subsys_state *css)
@@ -2164,6 +2198,9 @@ static inline void uclamp_rq_dec(struct rq *rq, struct task_struct *p) { }
 static inline void uclamp_fork(struct task_struct *p) { }
 static inline void uclamp_post_fork(struct task_struct *p) { }
 static inline void init_uclamp(void) { }
+#ifdef CONFIG_WOLOS_HINTS
+void wolos_uclamp_refresh_tgid(int tgid) { }
+#endif
 #endif /* !CONFIG_UCLAMP_TASK */
 
 bool sched_task_on_rq(struct task_struct *p)

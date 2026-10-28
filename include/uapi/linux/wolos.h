@@ -7,11 +7,13 @@
  * /sys/kernel/wolos/foreground_pid  (rw, root) tgid of the frontmost app, 0 = none
  * /sys/kernel/wolos/background_timerslack_ns (rw, root, v2) timer slack given to
  *     SCHED_IDLE (WOLOS_QOS_BACKGROUND) threads so their wakeups coalesce; 0 = off
+ * /sys/kernel/wolos/foreground_uclamp_min (rw, root, v3) uclamp_min floor for all
+ *     threads of foreground_pid (0..1024); 0 = off
  */
 #ifndef _UAPI_LINUX_WOLOS_H
 #define _UAPI_LINUX_WOLOS_H
 
-#define WOLOS_ABI_VERSION		2
+#define WOLOS_ABI_VERSION		3
 
 enum wolos_qos_class {
 	WOLOS_QOS_USER_INTERACTIVE = 0,	/* compositor, shell, input: SCHED_NORMAL nice -10, uclamp 768..1024 */
