@@ -70,6 +70,7 @@ u32 BPF_PROG(undo_cwnd, struct sock *sk)
 SEC("struct_ops")
 void BPF_PROG(cwnd_event, struct sock *sk, enum tcp_ca_event event)
 {
+	bbr_cwnd_event(sk, event);
 	dctcp_cwnd_event(sk, event);
 }
 
