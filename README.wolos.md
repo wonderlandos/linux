@@ -33,12 +33,15 @@ It is upstream Linux with a small set of desktop and gaming patches, a tuned con
 | PCI: ACS override (CachyOS) | Splits IOMMU groups for GPU passthrough on consumer boards. Opt-in. | absent `pcie_acs_override=` (default) |
 | ADIOS 3.3.0 I/O scheduler (CachyOS) | Adaptive-deadline MQ scheduler, default for blk-mq devices. | `echo mq-deadline > /sys/block/<dev>/queue/scheduler`, `CONFIG_MQ_IOSCHED_ADIOS=n` |
 | sched: BORE (CachyOS bore-cachy) | Burst-aware weighting on top of EEVDF; also marks futex waiters. | `sysctl kernel.sched_bore=0`, `CONFIG_SCHED_BORE=n` |
+| mm/swap: configurable default swap readahead | `vm.page-cluster` boot default from `CONFIG_SWAP_PAGE_CLUSTER_DEFAULT`, 0 (one page) with `CONFIG_CACHY`: on zram each read-ahead page is a decompression the faulting task waits for (CachyOS ships the same value as a sysctl). | `sysctl vm.page-cluster=3` |
+| selftests/wolos: futex_pingpong | FUTEX_WAIT/WAKE hand-off round trip, cross- and same-CPU; measures `futex.spin_ns`. Stock 7.0 baseline: 2.5 us cross-CPU, 1.3 us same-CPU. | n/a (test) |
 | drm/amd: AMD_PRIVATE_COLOR in Kconfig (CachyOS) | Plane color/HDR properties for gamescope. | `CONFIG_AMD_PRIVATE_COLOR=n` |
 
 Already upstream and used as is: `futex_waitv`, ntsync, PSI triggers and the cgroup v2 freezer (WolOS freezes background apps under memory pressure with them), sched_ext.
 
 ## Rust port of /sys/kernel/wolos (plan)
 
+Status per part: (1) blocked, no kobject/sysfs-attr bindings; until it lands the interface stays in C. (2)-(4) depend on (1). Scheduler core, futex and mm changes stay C (no Rust bindings there).
 At 7.3 the Rust bindings have no kobject or sysfs-attribute abstraction (`rust/kernel/` exposes sysfs only through device and faux helpers), so the hint interface stays in C for now. Plan, behind `CONFIG_WOLOS_HINTS_RUST` (default n, `depends on RUST && !WOLOS_HINTS`):
 1. `rust/kernel/kobject.rs`: `KObject::create_and_add(name, parent)` and a `#[vtable]` `KobjAttr` trait (`show`/`store`) over `kobj_attribute`, upstreamable on its own.
 2. `kernel/wolos_hints.rs`: `abi_version`, `foreground_pid`, `background_timerslack_ns` with the same modes and text format; state in `AtomicI32`/`AtomicU64`.
@@ -47,6 +50,9 @@ At 7.3 the Rust bindings have no kobject or sysfs-attribute abstraction (`rust/k
 CI turns it on once both builds pass the same sysfs test; then the C file goes.
 
 ## Left to userspace
+
+Image items: `vm.swappiness=180` with zram; zram-generator `compression-algorithm = lz4 (type=idle) zstd(level=3)` for recompression, `writeback-device` on a swap partition if present; btrfs fstab options below.
+btrfs: no carried patches. `space_cache=v2` and `discard=async` (on SSDs with discard) are upstream defaults since 5.15/6.2; per-subvolume read-policy balancing needs `BTRFS_EXPERIMENTAL` and stays off.
 
 `vm.max_map_count=1048576`, TCP fastopen (`net.ipv4.tcp_fastopen=3`) and larger socket buffers are sysctls (image). App-nap style freezing uses the cgroup v2 freezer from the session daemon. `background_timerslack_ns` is written by the session daemon.
 
@@ -68,11 +74,12 @@ EEVDF honours the same nice/uclamp values, so classes keep their meaning with or
 ## scx_wolos
 
 A sched_ext scheduler in `tools/sched_ext/scx_wolos.bpf.c` that reads the QoS class above:
-interactive tasks get a strict-priority queue with 1 ms slices and kick an idle CPU; frontmost, default and utility tasks share a weighted virtual-time queue (frontmost x4, utility /2); background runs when nothing else is runnable, and at least every 100 ms. While a task runs, its class sets the CPU performance target for schedutil.
+interactive tasks get a strict-priority queue with 1 ms slices and kick an idle CPU; frontmost, default and utility tasks are vtime-ordered (frontmost x4, utility /2) on the per-CPU queue of the CPU they last ran on; an idle CPU drains its own queue, then steals from CPUs on its LLC, then from any CPU; background runs when nothing else is runnable, and at least every 100 ms.
+Slices follow the class (interactive 1 ms, frontmost 2 ms, rest 4 ms). The loader copies `/sys/kernel/wolos/foreground_pid` in every second, so the frontmost app is boosted even without a QoS class, and fills the CPU-to-LLC map from sysfs. `-g` uses one global queue (A/B); `-s` also prints local / same-LLC / cross-LLC dispatches. While a task runs, its class sets the CPU performance target for schedutil.
 If it exits, stalls (5 s watchdog) or is killed, the kernel moves every task back to EEVDF.
 
 ```sh
-make -C tools/sched_ext scx_wolos         # needs clang, bpftool, libbpf; BTF from the running kernel
+make -C tools/sched_ext VMLINUX_BTF=<O>/vmlinux scx_wolos   # needs clang, bpftool, libbpf; BTF of a WolKernel build
 sudo tools/sched_ext/build/bin/scx_wolos -s   # -s prints enqueues per class each second
 cat /sys/kernel/sched_ext/root/ops            # "wolos" while attached
 ```
