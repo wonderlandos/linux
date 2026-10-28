@@ -1074,7 +1074,7 @@ static void __init swap_readahead_setup(void)
 	if (megs < 16)
 		page_cluster = 2;
 	else
-		page_cluster = 3;
+		page_cluster = CONFIG_SWAP_PAGE_CLUSTER_DEFAULT;
 	/*
 	 * Right now other parts of the system means that we
 	 * _really_ don't want to cluster much more

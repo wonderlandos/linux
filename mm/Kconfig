@@ -19,6 +19,19 @@ menuconfig SWAP
 	  used to provide more virtual memory than the actual RAM present
 	  in your computer.  If unsure say Y.
 
+config SWAP_PAGE_CLUSTER_DEFAULT
+	int "Default swap readahead (log2 pages, vm.page-cluster)"
+	depends on SWAP
+	range 0 10
+	default 0 if CACHY
+	default 3
+	help
+	  Pages read ahead on a swap-in fault, as a power of two. 3 (8 pages)
+	  amortises seeks on disk swap; on zram and fast NVMe each extra page is
+	  a decompression or I/O the faulting task waits for, so 0 (one page)
+	  cuts swap-in latency. Machines under 16 MiB keep 2.
+	  Runtime: sysctl vm.page-cluster.
+
 config ZSWAP
 	bool "Compressed cache for swap pages"
 	depends on SWAP
