@@ -15,7 +15,7 @@ It is upstream Linux with a small set of desktop and gaming patches, a tuned con
 - Latency: full preemption (`PREEMPT`), 1000 Hz, tickless only when idle.
 - Scheduling: `sched_ext` with BPF JIT and BTF; when no BPF scheduler is loaded, the stock EEVDF scheduler runs.
 - Memory: transparent hugepages on request (`madvise`), MGLRU, zram and zswap with zstd. PSI on.
-- Network: BBR congestion control by default.
+- Network: BBRv3 congestion control and fq by default, MPTCP and WireGuard built in.
 - Not built: datacenter-only hardware (InfiniBand, Fibre Channel, storage targets, legacy RAID cards, telecom links, cluster filesystems).
 
 ## Patches
@@ -25,8 +25,30 @@ It is upstream Linux with a small set of desktop and gaming patches, a tuned con
 | futex: bounded spin before sleeping in FUTEX_WAIT | A waiter spins up to `futex.spin_ns` (default 4000 ns) before sleeping; a wake during the spin skips the sleep and the wakeup IPI. Most lock hand-offs between game threads finish within microseconds. Stops early on `need_resched` or a signal. | `futex.spin_ns=0` (boot) or `/sys/module/futex/parameters/spin_ns` |
 | wolos: /sys/kernel/wolos hint interface | `abi_version` (read) and `foreground_pid` (root writes the frontmost app's tgid, 0 = none); `wolos_foreground_tgid()` for drivers; `<linux/wolos.h>` QoS class encoding. `CONFIG_WOLOS_HINTS`. | `CONFIG_WOLOS_HINTS=n` |
 | drm/i915: frame-deadline boost, foreground waitboost | i915 fences implement `.set_deadline`: when the compositor's atomic commit (or `SYNC_IOC_SET_DEADLINE`) sets the next vblank as deadline, a request still running is boosted at once instead of waiting for RPS autotuning. Waitboost on a blocking wait applies only to the frontmost app, so background GPU work stops raising clocks. | `i915.wol_deadline_boost=0`, `i915.wol_waitboost=1` (upstream behaviour) or `0` |
+| wolos: timer slack for background QoS threads | Threads entering `SCHED_IDLE` (QoS background) get at least `background_timerslack_ns` of timer slack, so their wakeups coalesce. ABI version 2. | write `0` to `/sys/kernel/wolos/background_timerslack_ns` (default) |
+| wolos: legacy PTYs, x32, vsyscall emulation, legacy fbcon acceleration depend on BROKEN | Unused interfaces cannot be built; vsyscall default is none. IA32, modify_ldt and fbcon on DRM stay. | `vsyscall=xonly` (boot); revert the commit for the rest |
+| tcp/bbr3 (google/bbr v3 via CachyOS) | BBRv3 as `bbr3`, the default congestion control; upstream `bbr` stays loadable. | `sysctl net.ipv4.tcp_congestion_control=cubic`, `CONFIG_TCP_CONG_BBR3=n` |
+| CachyOS: CONFIG_CACHY, EEVDF interactivity, MGLRU min_ttl, no watermark boost, no proactive compaction, split-lock throttle off | Desktop defaults from CachyOS (stand in for Zen's `ZEN_INTERACTIVE`; MGLRU `min_ttl` replaces le9). | `CONFIG_CACHY=n`; at runtime `/sys/kernel/mm/lru_gen/min_ttl_ms`, `vm.watermark_boost_factor`, `vm.compaction_proactiveness`, `split_lock_detect=warn` |
+| Kconfig: CC_OPTIMIZE_FOR_PERFORMANCE_O3 (CachyOS) | `-O3` choice; not selected in `wolos.config`. | choose `-O2` (default) |
+| PCI: ACS override (CachyOS) | Splits IOMMU groups for GPU passthrough on consumer boards. Opt-in. | absent `pcie_acs_override=` (default) |
+| ADIOS 3.3.0 I/O scheduler (CachyOS) | Adaptive-deadline MQ scheduler, default for blk-mq devices. | `echo mq-deadline > /sys/block/<dev>/queue/scheduler`, `CONFIG_MQ_IOSCHED_ADIOS=n` |
+| sched: BORE (CachyOS bore-cachy) | Burst-aware weighting on top of EEVDF; also marks futex waiters. | `sysctl kernel.sched_bore=0`, `CONFIG_SCHED_BORE=n` |
+| drm/amd: AMD_PRIVATE_COLOR in Kconfig (CachyOS) | Plane color/HDR properties for gamescope. | `CONFIG_AMD_PRIVATE_COLOR=n` |
 
 Already upstream and used as is: `futex_waitv`, ntsync, PSI triggers and the cgroup v2 freezer (WolOS freezes background apps under memory pressure with them), sched_ext.
+
+## Rust port of /sys/kernel/wolos (plan)
+
+At 7.3 the Rust bindings have no kobject or sysfs-attribute abstraction (`rust/kernel/` exposes sysfs only through device and faux helpers), so the hint interface stays in C for now. Plan, behind `CONFIG_WOLOS_HINTS_RUST` (default n, `depends on RUST && !WOLOS_HINTS`):
+1. `rust/kernel/kobject.rs`: `KObject::create_and_add(name, parent)` and a `#[vtable]` `KobjAttr` trait (`show`/`store`) over `kobj_attribute`, upstreamable on its own.
+2. `kernel/wolos_hints.rs`: `abi_version`, `foreground_pid`, `background_timerslack_ns` with the same modes and text format; state in `AtomicI32`/`AtomicU64`.
+3. `kernel/wolos_hints_shim.c`: `wolos_foreground_tgid()` and `wolos_background_timerslack_ns()` stay C exports (`EXPORT_SYMBOL_GPL`) reading `#[no_mangle]` statics, so i915 and the scheduler keep the same symbols and KMI.
+4. KUnit (`#[kunit_tests]`): store/show round trip, negative pid clamps to 0, slack above 1 s is `-EINVAL`.
+CI turns it on once both builds pass the same sysfs test; then the C file goes.
+
+## Left to userspace
+
+`vm.max_map_count=1048576`, TCP fastopen (`net.ipv4.tcp_fastopen=3`) and larger socket buffers are sysctls (image). App-nap style freezing uses the cgroup v2 freezer from the session daemon. `background_timerslack_ns` is written by the session daemon.
 
 ## QoS interface
 
