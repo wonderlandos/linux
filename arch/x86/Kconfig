@@ -2191,7 +2191,7 @@ config COMPAT_VDSO
 choice
 	prompt "vsyscall table for legacy applications"
 	depends on X86_64
-	default LEGACY_VSYSCALL_XONLY
+	default LEGACY_VSYSCALL_NONE
 	help
 	  Legacy user code that does not know how to find the vDSO expects
 	  to be able to issue three syscalls by calling fixed addresses in
@@ -2211,6 +2211,8 @@ choice
 
 	config LEGACY_VSYSCALL_XONLY
 		bool "Emulate execution only"
+		# WolKernel: glibc >= 2.14 and musl use the vDSO.
+		depends on BROKEN
 		help
 		  The kernel traps and emulates calls into the fixed vsyscall
 		  address mapping and does not allow reads.  This
@@ -3109,6 +3111,8 @@ config IA32_EMULATION_DEFAULT_DISABLED
 config X86_X32_ABI
 	bool "x32 ABI for 64-bit mode"
 	depends on X86_64
+	# WolKernel: no x32 userspace ships for the desktop.
+	depends on BROKEN
 	# llvm-objcopy does not convert x86_64 .note.gnu.property or
 	# compressed debug sections to x86_x32 properly:
 	# https://github.com/ClangBuiltLinux/linux/issues/514

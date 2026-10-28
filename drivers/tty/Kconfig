@@ -116,6 +116,8 @@ config UNIX98_PTYS
 
 config LEGACY_PTYS
 	bool "Legacy (BSD) PTY support"
+	# WolKernel: Unix98 PTYs only.
+	depends on BROKEN
 	default y
 	help
 	  A pseudo terminal (PTY) is a software device consisting of two
