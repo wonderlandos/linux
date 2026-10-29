@@ -63,7 +63,7 @@ quiet_cmd_image = BUILD   $@
 
 $(obj)/bzImage: $(obj)/setup.bin $(obj)/vmlinux.bin FORCE
 	$(call if_changed,image)
-	@$(kecho) 'Kernel: $@ is ready' ' (#'$(or $(KBUILD_BUILD_VERSION),`cat .version`)')'
+	@$(kecho) 'Kernel: $@ is ready' " (#$(or $(KBUILD_BUILD_VERSION),`cat .version`))"
 
 OBJCOPYFLAGS_vmlinux.bin := -O binary -R .note -R .comment -S
 $(obj)/vmlinux.bin: $(obj)/compressed/vmlinux FORCE
