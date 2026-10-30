@@ -272,6 +272,11 @@ extern void audit_put_tty(struct tty_struct *tty);
 /* audit watch/mark/tree functions */
 extern unsigned int audit_serial(void);
 #ifdef CONFIG_AUDITSYSCALL
+#ifdef CONFIG_WOLOS_AUDIT_LAZY
+void audit_lazy_rules_added(void);
+#else
+static inline void audit_lazy_rules_added(void) { }
+#endif
 extern int auditsc_get_stamp(struct audit_context *ctx,
 			     struct audit_stamp *stamp);
 

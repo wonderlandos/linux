@@ -1008,8 +1008,8 @@ static inline int audit_add_rule(struct audit_entry *entry)
 		list_add_tail_rcu(&entry->list, list);
 	}
 #ifdef CONFIG_AUDITSYSCALL
-	if (!dont_count)
-		audit_n_rules++;
+	if (!dont_count && audit_n_rules++ == 0)
+		audit_lazy_rules_added();
 
 	if (!audit_match_signal(entry))
 		audit_signals++;
