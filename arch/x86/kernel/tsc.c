@@ -15,6 +15,7 @@
 #include <linux/percpu.h>
 #include <linux/timex.h>
 #include <linux/static_key.h>
+#include <linux/wolos_policy.h>
 #include <linux/static_call.h>
 
 #include <asm/cpuid/api.h>
@@ -1240,11 +1241,18 @@ static void __init check_system_tsc_reliable(void)
 	 *    modifications
 	 *  - not more than four packages
 	 */
-	if (boot_cpu_has(X86_FEATURE_CONSTANT_TSC) &&
-	    boot_cpu_has(X86_FEATURE_NONSTOP_TSC) &&
-	    boot_cpu_has(X86_FEATURE_TSC_ADJUST) &&
-	    topology_max_packages() <= 4)
-		tsc_disable_clocksource_watchdog();
+	{
+		struct wolos_tsc_facts f = {
+			.constant = boot_cpu_has(X86_FEATURE_CONSTANT_TSC),
+			.nonstop = boot_cpu_has(X86_FEATURE_NONSTOP_TSC),
+			.tsc_adjust = boot_cpu_has(X86_FEATURE_TSC_ADJUST),
+			.hypervisor = boot_cpu_has(X86_FEATURE_HYPERVISOR),
+			.packages = topology_max_packages(),
+		};
+
+		if (wolos_tsc_trusted(&f))
+			tsc_disable_clocksource_watchdog();
+	}
 }
 
 /*
