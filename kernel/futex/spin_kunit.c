@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /* KUnit: WolKernel adaptive FUTEX_WAIT spin policy (futex_spin_budget/next). */
 #include <kunit/test.h>
+#include <linux/mman.h>
+#include <linux/uaccess.h>
 #include "futex.h"
 
 static void budget_off_cases(struct kunit *t)
@@ -46,11 +48,28 @@ static void waitv_inline_bound(struct kunit *t)
 	futex_waitv_inline_on = saved;
 }
 
+static void precheck_reads_user_value(struct kunit *t)
+{
+	unsigned long addr = kunit_vm_mmap(t, NULL, 0, PAGE_SIZE,
+					   PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0);
+	u32 __user *u = (u32 __user *)addr;
+	u32 five = 5;
+
+	KUNIT_ASSERT_NE(t, addr, 0UL);
+	KUNIT_ASSERT_EQ(t, copy_to_user(u, &five, sizeof(five)), 0UL);
+	KUNIT_EXPECT_FALSE(t, futex_value_differs(u, 5));	/* match: locked path decides */
+	KUNIT_EXPECT_TRUE(t, futex_value_differs(u, 6));
+	/* misaligned: keep -EINVAL; unmapped: keep -EFAULT handling */
+	KUNIT_EXPECT_FALSE(t, futex_value_differs((u32 __user *)(addr + 1), 6));
+	KUNIT_EXPECT_FALSE(t, futex_value_differs((u32 __user *)(addr - PAGE_SIZE), 6));
+}
+
 static struct kunit_case futex_spin_cases[] = {
 	KUNIT_CASE(budget_off_cases),
 	KUNIT_CASE(budget_scales_with_score),
 	KUNIT_CASE(score_moves),
 	KUNIT_CASE(waitv_inline_bound),
+	KUNIT_CASE(precheck_reads_user_value),
 	{}
 };
 
