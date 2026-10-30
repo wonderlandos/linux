@@ -12,6 +12,7 @@
 
 #define pr_fmt(fmt) "watchdog: " fmt
 
+#include <linux/wolos_compat.h>
 #include <linux/cpu.h>
 #include <linux/init.h>
 #include <linux/irq.h>
@@ -47,7 +48,11 @@ unsigned long __read_mostly watchdog_enabled;
 int __read_mostly watchdog_user_enabled = 1;
 static int __read_mostly watchdog_hardlockup_user_enabled = WATCHDOG_HARDLOCKUP_DEFAULT;
 static int __read_mostly watchdog_softlockup_user_enabled = 1;
+#ifdef CONFIG_WOLOS_HINTS
+int __read_mostly watchdog_thresh = WOLOS_WATCHDOG_THRESH;
+#else
 int __read_mostly watchdog_thresh = 10;
+#endif
 static int __read_mostly watchdog_thresh_next;
 static int __read_mostly watchdog_hardlockup_available;
 
