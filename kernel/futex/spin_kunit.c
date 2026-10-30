@@ -32,10 +32,25 @@ static void score_moves(struct kunit *t)
 	KUNIT_EXPECT_EQ(t, s, 1U);
 }
 
+static void waitv_inline_bound(struct kunit *t)
+{
+	bool saved = futex_waitv_inline_on;
+
+	futex_waitv_inline_on = true;
+	KUNIT_EXPECT_TRUE(t, futex_waitv_inline(1));
+	KUNIT_EXPECT_TRUE(t, futex_waitv_inline(FUTEX_WAITV_INLINE));
+	KUNIT_EXPECT_FALSE(t, futex_waitv_inline(FUTEX_WAITV_INLINE + 1));
+	KUNIT_EXPECT_FALSE(t, futex_waitv_inline(FUTEX_WAITV_MAX));
+	futex_waitv_inline_on = false;	/* off: always the heap vector */
+	KUNIT_EXPECT_FALSE(t, futex_waitv_inline(1));
+	futex_waitv_inline_on = saved;
+}
+
 static struct kunit_case futex_spin_cases[] = {
 	KUNIT_CASE(budget_off_cases),
 	KUNIT_CASE(budget_scales_with_score),
 	KUNIT_CASE(score_moves),
+	KUNIT_CASE(waitv_inline_bound),
 	{}
 };
 
@@ -45,3 +60,4 @@ static struct kunit_suite futex_spin_suite = {
 };
 kunit_test_suite(futex_spin_suite);
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <linux/moduleparam.h>
+#include <kunit/visibility.h>
 #include <linux/sched/clock.h>
 #include <linux/random.h>
 #include <linux/sched/stat.h>
@@ -381,6 +382,10 @@ static long futex_wait_restart(struct restart_block *restart);
 #define MODULE_PARAM_PREFIX "futex."
 static unsigned int futex_spin_ns __read_mostly = 4000;
 module_param_named(spin_ns, futex_spin_ns, uint, 0644);
+
+bool futex_waitv_inline_on __read_mostly = true;
+module_param_named(waitv_inline, futex_waitv_inline_on, bool, 0644);
+EXPORT_SYMBOL_IF_KUNIT(futex_waitv_inline_on);
 
 static void futex_spin_wait(struct futex_q *q)
 {
