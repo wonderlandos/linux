@@ -19,6 +19,8 @@
  */
 
 #include <linux/oom.h>
+#include <linux/wolos.h>
+#include <linux/wolos_policy.h>
 #include <linux/mm.h>
 #include <linux/err.h>
 #include <linux/gfp.h>
@@ -228,6 +230,12 @@ long oom_badness(struct task_struct *p, unsigned long totalpages)
 	points = get_mm_rss_sum(p->mm) + get_mm_counter_sum(p->mm, MM_SWAPENTS) +
 		mm_pgtables_bytes(p->mm) / PAGE_SIZE;
 	task_unlock(p);
+
+	/* WolKernel: background first, the app in front last. */
+	points = wolos_oom_bias(points, totalpages,
+				wolos_foreground_tgid() > 0 &&
+				p->tgid == wolos_foreground_tgid(),
+				p->policy == SCHED_IDLE);
 
 	/* Normalize to oom_score_adj units */
 	adj *= totalpages / OOM_SCORE_ADJ_MAX;
