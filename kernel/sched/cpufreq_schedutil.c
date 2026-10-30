@@ -254,6 +254,7 @@ static void sugov_get_util(struct sugov_cpu *sg_cpu, unsigned long boost)
 	if (!scx_switched_all())
 		util += cpu_util_cfs_boost(sg_cpu->cpu);
 	util = effective_cpu_util(sg_cpu->cpu, util, &min, &max);
+	boost = max(boost, wolos_input_boost_util(max));
 	util = max(util, boost);
 	sg_cpu->bw_min = min;
 	sg_cpu->bw_max = max;

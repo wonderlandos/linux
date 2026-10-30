@@ -207,3 +207,12 @@ config WOLOS_HINTS
 	  Lets the WolOS session daemon publish the frontmost application
 	  (/sys/kernel/wolos/foreground_pid) so drivers can boost it only.
 	  QoS classes themselves use sched_setattr(2), see <linux/wolos.h>.
+
+config WOLOS_INPUT_BOOST
+	bool "WolOS input boost (CPU floor right after an input event)"
+	depends on WOLOS_HINTS && INPUT=y && CPU_FREQ_GOV_SCHEDUTIL
+	default y
+	help
+	  For wolos_input_boost.ms (100 ms) after a key, button or pointer
+	  event, schedutil keeps CPUs at least at floor_pct of capacity, and
+	  GPU drivers on wolos_input_boost_chain get a call. ms=0 turns it off.
