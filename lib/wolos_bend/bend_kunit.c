@@ -502,9 +502,14 @@ static void clear_policy(struct kunit *t)
 	KUNIT_EXPECT_EQ(t, bend_clear_pages_grain(SZ_4M / PAGE_SIZE), 512 / kb);
 	KUNIT_EXPECT_EQ(t, bend_clear_pages_grain(SZ_1G / PAGE_SIZE), 512 / kb);
 	KUNIT_EXPECT_EQ(t, bend_clear_pages_grain(1), 0);
+	/* fast path: one compare against bend_clear_min_pages */
+	KUNIT_EXPECT_EQ(t, bend_clear_min_pages, SZ_4M / PAGE_SIZE);
 	bend_set_enabled(false);
 	KUNIT_EXPECT_EQ(t, bend_clear_pages_grain(SZ_1G / PAGE_SIZE), 0);
+	KUNIT_EXPECT_EQ(t, bend_clear_min_pages, UINT_MAX);
+	KUNIT_EXPECT_FALSE(t, bend_clear_user_highpages(NULL, 0, UINT_MAX - 1));
 	bend_set_enabled(was);
+	KUNIT_EXPECT_EQ(t, bend_clear_min_pages, SZ_4M / PAGE_SIZE);
 }
 
 static void clear_zeroes(struct kunit *t)
