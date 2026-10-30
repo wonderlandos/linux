@@ -77,6 +77,30 @@ static unsigned long pipe_user_pages_soft = PIPE_DEF_BUFFERS * INR_OPEN_CUR;
  * -- Manfred Spraul <manfred@colorfullife.com> 2002-05-09
  */
 
+/*
+ * WolKernel: skip the wait-queue lock when nobody sleeps on it. A writer to an
+ * empty pipe used to take rd_wait.lock on every write even while the reader
+ * was busy; the lock's cache line then bounces between the two CPUs.
+ * Waiters set their state with a full barrier (prepare_to_wait_event) and
+ * pipe_poll() orders poll_wait() before reading head/tail, so the
+ * wq_has_sleeper() check (smp_mb + list test) cannot miss a sleeper.
+ * Off: /sys/module/pipe/parameters/wake_check=0.
+ */
+static bool pipe_wake_check __read_mostly = true;
+module_param_named(wake_check, pipe_wake_check, bool, 0644);
+
+/* True when a wakeup on @wq must be issued. */
+static inline bool pipe_wake_needed(struct wait_queue_head *wq)
+{
+	return !READ_ONCE(pipe_wake_check) || wq_has_sleeper(wq);
+}
+
+static inline void pipe_wake_sync(struct wait_queue_head *wq, __poll_t key)
+{
+	if (pipe_wake_needed(wq))
+		wake_up_interruptible_sync_poll(wq, key);
+}
+
 #ifdef CONFIG_PROVE_LOCKING
 static int pipe_lock_cmp_fn(const struct lockdep_map *a,
 			    const struct lockdep_map *b)
@@ -472,9 +496,9 @@ anon_pipe_read(struct kiocb *iocb, struct iov_iter *to)
 	anon_pipe_trim_and_unlock(pipe);
 
 	if (wake_writer)
-		wake_up_interruptible_sync_poll(&pipe->wr_wait, EPOLLOUT | EPOLLWRNORM);
+		pipe_wake_sync(&pipe->wr_wait, EPOLLOUT | EPOLLWRNORM);
 	if (wake_next_reader)
-		wake_up_interruptible_sync_poll(&pipe->rd_wait, EPOLLIN | EPOLLRDNORM);
+		pipe_wake_sync(&pipe->rd_wait, EPOLLIN | EPOLLRDNORM);
 	kill_fasync(&pipe->fasync_writers, SIGIO, POLL_OUT);
 	return ret;
 }
@@ -644,7 +668,7 @@ anon_pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		 */
 		mutex_unlock(&pipe->mutex);
 		if (was_empty)
-			wake_up_interruptible_sync_poll(&pipe->rd_wait, EPOLLIN | EPOLLRDNORM);
+			pipe_wake_sync(&pipe->rd_wait, EPOLLIN | EPOLLRDNORM);
 		kill_fasync(&pipe->fasync_readers, SIGIO, POLL_IN);
 		wait_event_interruptible_exclusive(pipe->wr_wait, pipe_writable(pipe));
 		mutex_lock(&pipe->mutex);
@@ -668,10 +692,10 @@ out:
 	 * ->pseudo_edgetrigger enables per-write wakeups, see pipe_poll()
 	 */
 	if (was_empty || READ_ONCE(pipe->pseudo_edgetrigger))
-		wake_up_interruptible_sync_poll(&pipe->rd_wait, EPOLLIN | EPOLLRDNORM);
+		pipe_wake_sync(&pipe->rd_wait, EPOLLIN | EPOLLRDNORM);
 	kill_fasync(&pipe->fasync_readers, SIGIO, POLL_IN);
 	if (wake_next_writer)
-		wake_up_interruptible_sync_poll(&pipe->wr_wait, EPOLLOUT | EPOLLWRNORM);
+		pipe_wake_sync(&pipe->wr_wait, EPOLLOUT | EPOLLWRNORM);
 	return ret;
 }
 
@@ -759,6 +783,9 @@ pipe_poll(struct file *filp, poll_table *wait)
 		poll_wait(filp, &pipe->rd_wait, wait);
 	if (filp->f_mode & FMODE_WRITE)
 		poll_wait(filp, &pipe->wr_wait, wait);
+	/* Pairs with wq_has_sleeper() in pipe_wake_sync(). */
+	if (wait && READ_ONCE(pipe_wake_check))
+		smp_mb();
 
 	/*
 	 * .. and only then can you do the racy tests. That way,
@@ -1633,3 +1660,7 @@ static int __init init_pipe_fs(void)
 }
 
 fs_initcall(init_pipe_fs);
+
+#ifdef CONFIG_PIPE_WAKE_KUNIT_TEST
+#include "pipe_kunit.c"
+#endif
