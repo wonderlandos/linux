@@ -322,6 +322,7 @@ SYSCALL_DEFINE5(futex_waitv, struct futex_waitv __user *, waiters,
 		unsigned int, nr_futexes, unsigned int, flags,
 		struct __kernel_timespec __user *, timeout, clockid_t, clockid)
 {
+	struct futex_vector inline_futexv[FUTEX_WAITV_INLINE];
 	struct hrtimer_sleeper to;
 	struct futex_vector *futexv;
 	int ret;
@@ -336,10 +337,15 @@ SYSCALL_DEFINE5(futex_waitv, struct futex_waitv __user *, waiters,
 	if (timeout && (ret = futex2_setup_timeout(timeout, clockid, &to)))
 		return ret;
 
-	futexv = kzalloc_objs(*futexv, nr_futexes);
-	if (!futexv) {
-		ret = -ENOMEM;
-		goto destroy_timer;
+	/* futex_parse_waitv() fills every used field: no zeroing needed. */
+	if (futex_waitv_inline(nr_futexes)) {
+		futexv = inline_futexv;
+	} else {
+		futexv = kzalloc_objs(*futexv, nr_futexes);
+		if (!futexv) {
+			ret = -ENOMEM;
+			goto destroy_timer;
+		}
 	}
 
 	ret = futex_parse_waitv(futexv, waiters, nr_futexes, futex_wake_mark,
@@ -347,7 +353,8 @@ SYSCALL_DEFINE5(futex_waitv, struct futex_waitv __user *, waiters,
 	if (!ret)
 		ret = futex_wait_multiple(futexv, nr_futexes, timeout ? &to : NULL);
 
-	kfree(futexv);
+	if (futexv != inline_futexv)
+		kfree(futexv);
 
 destroy_timer:
 	if (timeout)
