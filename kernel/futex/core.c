@@ -1596,6 +1596,7 @@ static void futex_hash_bucket_init(struct futex_hash_bucket *fhb)
 	atomic_set(&fhb->waiters, 0);
 	plist_head_init(&fhb->chain);
 	spin_lock_init(&fhb->lock);
+	fhb->spin_score = FUTEX_SPIN_SCORE_MAX;
 }
 
 #define FH_CUSTOM	0x01

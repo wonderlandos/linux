@@ -1711,6 +1711,11 @@ config FUTEX_PI
 	depends on FUTEX && RT_MUTEXES
 	default y
 
+config FUTEX_SPIN_KUNIT_TEST
+	tristate "KUnit test for the WolKernel adaptive futex spin" if !KUNIT_ALL_TESTS
+	depends on FUTEX && KUNIT
+	default KUNIT_ALL_TESTS
+
 config FUTEX_PRIVATE_HASH
 	bool
 	depends on FUTEX && !BASE_SMALL && MMU

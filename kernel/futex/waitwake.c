@@ -2,6 +2,8 @@
 
 #include <linux/moduleparam.h>
 #include <linux/sched/clock.h>
+#include <linux/random.h>
+#include <linux/sched/stat.h>
 #include <linux/plist.h>
 #include <linux/sched/task.h>
 #include <linux/sched/signal.h>
@@ -382,15 +384,35 @@ module_param_named(spin_ns, futex_spin_ns, uint, 0644);
 
 static void futex_spin_wait(struct futex_q *q)
 {
-	unsigned int ns = READ_ONCE(futex_spin_ns);
-	u64 end;
+	struct futex_hash_bucket *hb;
+	spinlock_t *lock;
+	unsigned int score;
+	u64 budget, end;
+	bool woke;
 
-	if (!ns || num_online_cpus() < 2)
+	if (num_online_cpus() < 2)
 		return;
-	end = local_clock() + ns;
+	lock = READ_ONCE(q->lock_ptr);
+	if (!lock)	/* already woken */
+		return;
+	hb = container_of(lock, struct futex_hash_bucket, lock);
+	score = READ_ONCE(hb->spin_score);
+	/* Never steal the CPU from a runnable task, often the lock holder. */
+	budget = futex_spin_budget(READ_ONCE(futex_spin_ns), score,
+				   single_task_running());
+	if (!budget) {
+		/* Periodic retry so a decayed bucket can recover. */
+		if (!score && !(get_random_u32() & 63))
+			WRITE_ONCE(hb->spin_score, 1);
+		return;
+	}
+	end = local_clock() + budget;
 	while (!plist_node_empty(&q->list) && !need_resched() &&
 	       !signal_pending(current) && local_clock() < end)
 		cpu_relax();
+	woke = plist_node_empty(&q->list);
+	if (futex_spin_next(score, woke) != score)
+		WRITE_ONCE(hb->spin_score, futex_spin_next(score, woke));
 }
 
 void futex_do_wait(struct futex_q *q, struct hrtimer_sleeper *timeout)

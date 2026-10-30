@@ -152,7 +152,34 @@ struct futex_hash_bucket {
 	atomic_t waiters;
 	spinlock_t lock;
 	struct plist_head chain;
+	unsigned int spin_score;	/* WolKernel adaptive spin, see futex_spin_next() */
 } ____cacheline_aligned_in_smp;
+
+/*
+ * WolKernel adaptive FUTEX_WAIT spin. Each bucket keeps a score in
+ * [0, FUTEX_SPIN_SCORE_MAX]. The spin budget is spin_ns scaled by the score;
+ * a spin that ends in a wakeup raises it, one that times out halves it, so
+ * buckets with long waits stop wasting CPU and quick hand-offs keep spinning.
+ * Pure functions so KUnit can check them (spin_kunit.c).
+ */
+#define FUTEX_SPIN_SCORE_MAX	8U
+
+static inline u64 futex_spin_budget(unsigned int spin_ns, unsigned int score,
+				    bool cpu_alone)
+{
+	if (!spin_ns || !cpu_alone || !score)
+		return 0;
+	if (score > FUTEX_SPIN_SCORE_MAX)
+		score = FUTEX_SPIN_SCORE_MAX;
+	return (u64)spin_ns * score / FUTEX_SPIN_SCORE_MAX;
+}
+
+static inline unsigned int futex_spin_next(unsigned int score, bool woke)
+{
+	if (woke)
+		return score >= FUTEX_SPIN_SCORE_MAX ? FUTEX_SPIN_SCORE_MAX : score + 1;
+	return score / 2;
+}
 
 /*
  * Priority Inheritance state:
