@@ -2850,6 +2850,11 @@ config KFIFO_KUNIT_TEST
 
 	  If unsure, say N.
 
+config WOLOS_POLICY_KUNIT_TEST
+	tristate "KUnit test for WolKernel policy decisions" if !KUNIT_ALL_TESTS
+	depends on KUNIT
+	default KUNIT_ALL_TESTS
+
 config LIST_KUNIT_TEST
 	tristate "KUnit Test for Kernel Linked-list structures" if !KUNIT_ALL_TESTS
 	depends on KUNIT
