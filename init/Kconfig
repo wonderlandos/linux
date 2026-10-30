@@ -297,6 +297,11 @@ config SYSVIPC_COMPAT
 	def_bool y
 	depends on COMPAT && SYSVIPC
 
+config SEM_READ_KUNIT_TEST
+	bool "KUnit test for the WolKernel one-semaphore semctl reads" if !KUNIT_ALL_TESTS
+	depends on SYSVIPC && KUNIT=y
+	default KUNIT_ALL_TESTS
+
 config POSIX_MQUEUE
 	bool "POSIX Message Queues"
 	depends on NET

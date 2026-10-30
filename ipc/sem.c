@@ -87,6 +87,7 @@
 #include <linux/sched/wake_q.h>
 #include <linux/nospec.h>
 #include <linux/rhashtable.h>
+#include <linux/moduleparam.h>
 
 #include <linux/uaccess.h>
 #include "util.h"
@@ -379,6 +380,18 @@ static void complexmode_tryleave(struct sem_array *sma)
 }
 
 #define SEM_GLOBAL_LOCK	(-1)
+
+/*
+ * WolKernel: GETVAL, GETPID, GETNCNT and GETZCNT read one semaphore, so they
+ * take that semaphore's lock like a single-sop semop instead of the whole
+ * array. Before, each call took sem_perm.lock, walked every sem->lock in
+ * complexmode_enter() and forced the next USE_GLOBAL_LOCK_HYSTERESIS simple
+ * semops onto the global lock. In simple mode the global pending lists are
+ * empty (unmerge_queues), so count_semcnt() sees the same queues.
+ * Off: /sys/module/sem/parameters/read_one_lock=0.
+ */
+static bool sem_read_one_lock __read_mostly = true;
+module_param_named(read_one_lock, sem_read_one_lock, bool, 0644);
 /*
  * If the request contains only one semaphore operation, and there are
  * no complex transactions pending, lock only the semaphore involved.
@@ -1407,7 +1420,7 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
 {
 	struct sem_array *sma;
 	struct sem *curr;
-	int err, nsems;
+	int err, nsems, locknum = SEM_GLOBAL_LOCK;
 	ushort fast_sem_io[SEMMSL_FAST];
 	ushort *sem_io = fast_sem_io;
 	DEFINE_WAKE_Q(wake_q);
@@ -1532,13 +1545,19 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
 	if (semnum < 0 || semnum >= nsems)
 		goto out_rcu_wakeup;
 
-	sem_lock(sma, NULL, -1);
+	semnum = array_index_nospec(semnum, nsems);
+	if (READ_ONCE(sem_read_one_lock)) {
+		struct sembuf one = { .sem_num = semnum };
+
+		locknum = sem_lock(sma, &one, 1);
+	} else {
+		sem_lock(sma, NULL, -1);
+	}
 	if (!ipc_valid_object(&sma->sem_perm)) {
 		err = -EIDRM;
 		goto out_unlock;
 	}
 
-	semnum = array_index_nospec(semnum, nsems);
 	curr = &sma->sems[semnum];
 
 	switch (cmd) {
@@ -1557,7 +1576,7 @@ static int semctl_main(struct ipc_namespace *ns, int semid, int semnum,
 	}
 
 out_unlock:
-	sem_unlock(sma, -1);
+	sem_unlock(sma, locknum);
 out_rcu_wakeup:
 	rcu_read_unlock();
 	wake_up_q(&wake_q);
@@ -2481,4 +2500,8 @@ static int sysvipc_sem_proc_show(struct seq_file *s, void *it)
 
 	return 0;
 }
+#endif
+
+#ifdef CONFIG_SEM_READ_KUNIT_TEST
+#include "sem_kunit.c"
 #endif
