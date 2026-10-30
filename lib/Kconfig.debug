@@ -2831,6 +2831,11 @@ config SYSCTL_KUNIT_TEST
 
 	  If unsure, say N.
 
+config WOLOS_COMPAT_KUNIT_TEST
+	tristate "KUnit test for WolKernel legacy-path decisions" if !KUNIT_ALL_TESTS
+	depends on KUNIT
+	default KUNIT_ALL_TESTS
+
 config KFIFO_KUNIT_TEST
 	tristate "KUnit Test for the generic kernel FIFO implementation" if !KUNIT_ALL_TESTS
 	depends on KUNIT
