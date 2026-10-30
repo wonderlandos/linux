@@ -18,6 +18,7 @@
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/kvm_types.h>
+#include <linux/wolos_compat.h>
 
 #include <asm/spec-ctrl.h>
 #include <asm/cmdline.h>
@@ -1278,6 +1279,10 @@ static void __init retbleed_select_mitigation(void)
 		/* Final mitigation depends on spectre-v2 selection */
 		if (boot_cpu_has(X86_FEATURE_IBRS_ENHANCED))
 			retbleed_mitigation = RETBLEED_MITIGATION_EIBRS;
+		else if (wolos_retbleed_prefer_stuff(IS_ENABLED(CONFIG_WOLOS_RETBLEED_STUFF),
+						     IS_ENABLED(CONFIG_MITIGATION_CALL_DEPTH_TRACKING),
+						     false))
+			retbleed_mitigation = RETBLEED_MITIGATION_STUFF;
 		else if (boot_cpu_has(X86_FEATURE_IBRS))
 			retbleed_mitigation = RETBLEED_MITIGATION_IBRS;
 		else
