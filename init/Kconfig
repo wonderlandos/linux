@@ -358,6 +358,15 @@ config AUDITSYSCALL
 	depends on AUDIT && HAVE_ARCH_AUDITSYSCALL
 	select FSNOTIFY
 
+config WOLOS_AUDIT_LAZY
+	bool "Audit: no syscall slow path while there are no syscall rules"
+	depends on AUDITSYSCALL
+	default y
+	help
+	  With audit enabled but no syscall rules, tasks stay off the syscall
+	  entry/exit audit hooks. The first rule puts every task back on them.
+	  LSM/AVC records then carry no SYSCALL record while no rules exist.
+
 source "kernel/irq/Kconfig"
 source "kernel/time/Kconfig"
 source "kernel/bpf/Kconfig"

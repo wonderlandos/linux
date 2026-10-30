@@ -276,6 +276,11 @@ extern void audit_put_tty(struct tty_struct *tty);
 extern unsigned int audit_serial(void);
 #ifdef CONFIG_AUDITSYSCALL
 void audit_rule_account(const struct audit_krule *rule);
+#ifdef CONFIG_WOLOS_AUDIT_LAZY
+void audit_lazy_rules_added(void);
+#else
+static inline void audit_lazy_rules_added(void) { }
+#endif
 void audit_rule_unaccount(const struct audit_krule *rule);
 
 extern int auditsc_get_stamp(struct audit_context *ctx,

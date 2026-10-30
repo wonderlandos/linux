@@ -66,6 +66,7 @@
 #include <uapi/linux/openat2.h> // struct open_how
 #include <uapi/linux/fanotify.h>
 
+#include <linux/wolos_compat.h>
 #include "audit.h"
 
 /* flags stating the success for a syscall */
@@ -1079,9 +1080,51 @@ int audit_alloc(struct task_struct *tsk)
 	context->filterkey = key;
 
 	audit_set_context(tsk, context);
-	set_task_syscall_work(tsk, SYSCALL_AUDIT);
+	/*
+	 * No syscall rules: keep the context (a rule added later needs it) but
+	 * leave the task off the syscall slow path; audit_rules_changed() puts
+	 * it back on.
+	 */
+	if (wolos_audit_needs_work(IS_ENABLED(CONFIG_WOLOS_AUDIT_LAZY), false,
+				   READ_ONCE(audit_n_rules)))
+		set_task_syscall_work(tsk, SYSCALL_AUDIT);
+	else
+		context->dummy = 1;
 	return 0;
 }
+
+#ifdef CONFIG_WOLOS_AUDIT_LAZY
+/*
+ * Called with audit_filter_mutex held after the syscall rule count went from
+ * 0 to 1: every task with a context gets the syscall work back. Pairs with the
+ * barrier in audit_lazy_exit(): either that task sees the new count, or this
+ * walk runs after its clear.
+ */
+void audit_lazy_rules_added(void)
+{
+	struct task_struct *g, *t;
+
+	smp_mb();
+	rcu_read_lock();
+	for_each_process_thread(g, t)
+		if (t->audit_context)
+			set_task_syscall_work(t, SYSCALL_AUDIT);
+	rcu_read_unlock();
+}
+
+/* The task drops its own syscall work once no syscall rules are left. */
+static void audit_lazy_exit(void)
+{
+	if (READ_ONCE(audit_n_rules))
+		return;
+	clear_task_syscall_work(current, SYSCALL_AUDIT);
+	smp_mb();
+	if (READ_ONCE(audit_n_rules))
+		set_task_syscall_work(current, SYSCALL_AUDIT);
+}
+#else
+static inline void audit_lazy_exit(void) { }
+#endif
 
 static inline void audit_free_context(struct audit_context *context)
 {
@@ -2056,6 +2099,7 @@ void __audit_syscall_exit(int success, long return_code)
 
 out:
 	audit_reset_context(context);
+	audit_lazy_exit();
 }
 
 static inline void handle_one(const struct inode *inode)

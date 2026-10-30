@@ -249,8 +249,8 @@ void audit_rule_account(const struct audit_krule *rule)
 {
 	lockdep_assert_held(&audit_filter_mutex);
 
-	if (audit_rule_counts_syscalls(rule))
-		audit_n_rules++;
+	if (audit_rule_counts_syscalls(rule) && audit_n_rules++ == 0)
+		audit_lazy_rules_added();
 	if (!audit_match_signal(rule))
 		audit_signals++;
 }
