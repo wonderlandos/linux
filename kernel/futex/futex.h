@@ -480,6 +480,19 @@ struct futex_vector {
 	struct futex_q q;
 };
 
+/*
+ * WolKernel: futex_waitv() on up to FUTEX_WAITV_INLINE futexes (Wine/Proton
+ * waits on one to three objects almost always) uses an on-stack vector
+ * instead of a kzalloc/kfree per call. Off: futex.waitv_inline=0.
+ */
+#define FUTEX_WAITV_INLINE	4
+extern bool futex_waitv_inline_on;
+
+static inline bool futex_waitv_inline(unsigned int nr)
+{
+	return READ_ONCE(futex_waitv_inline_on) && nr <= FUTEX_WAITV_INLINE;
+}
+
 extern int futex_parse_waitv(struct futex_vector *futexv,
 			     struct futex_waitv __user *uwaitv,
 			     unsigned int nr_futexes, futex_wake_fn *wake,
