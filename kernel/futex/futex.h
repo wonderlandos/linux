@@ -493,6 +493,23 @@ static inline bool futex_waitv_inline(unsigned int nr)
 	return READ_ONCE(futex_waitv_inline_on) && nr <= FUTEX_WAITV_INLINE;
 }
 
+extern bool futex_precheck_on;
+
+/*
+ * Lockless pre-read: true only when *uaddr is aligned, readable without
+ * faulting and differs from @val. A fault or a match says nothing; the
+ * locked path decides.
+ */
+static inline bool futex_value_differs(u32 __user *uaddr, u32 val)
+{
+	u32 cur;
+
+	/* Misaligned addresses keep their -EINVAL from get_futex_key(). */
+	if (!IS_ALIGNED((unsigned long)uaddr, sizeof(u32)))
+		return false;
+	return !futex_get_value_locked(&cur, uaddr) && cur != val;
+}
+
 extern int futex_parse_waitv(struct futex_vector *futexv,
 			     struct futex_waitv __user *uwaitv,
 			     unsigned int nr_futexes, futex_wake_fn *wake,

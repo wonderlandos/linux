@@ -387,6 +387,17 @@ bool futex_waitv_inline_on __read_mostly = true;
 module_param_named(waitv_inline, futex_waitv_inline_on, bool, 0644);
 EXPORT_SYMBOL_IF_KUNIT(futex_waitv_inline_on);
 
+/*
+ * WolKernel: a futex whose value already differs from the expected one
+ * returns -EWOULDBLOCK before any key lookup, hashing or bucket lock. That
+ * is a valid linearization (the value differed at that instant); a value that
+ * matches is still re-read under the bucket lock before sleeping, so no
+ * wakeup can be lost. Wine/Proton fsync waits on already-signaled objects all
+ * the time. Off: futex.precheck=0.
+ */
+bool futex_precheck_on __read_mostly = true;
+module_param_named(precheck, futex_precheck_on, bool, 0644);
+
 static void futex_spin_wait(struct futex_q *q)
 {
 	struct futex_hash_bucket *hb;
@@ -510,6 +521,12 @@ int futex_wait_multiple_setup(struct futex_vector *vs, int count, int *woken)
 	 * Private futexes doesn't need to recalculate hash in retry, so skip
 	 * get_futex_key() when retrying.
 	 */
+	if (READ_ONCE(futex_precheck_on)) {
+		for (i = 0; i < count; i++) {
+			if (futex_value_differs(u64_to_user_ptr(vs[i].w.uaddr), vs[i].w.val))
+				return -EWOULDBLOCK;
+		}
+	}
 retry:
 	for (i = 0; i < count; i++) {
 		if (!(vs[i].w.flags & FLAGS_SHARED) && retry)
@@ -700,6 +717,8 @@ int futex_wait_setup(u32 __user *uaddr, u32 val, unsigned int flags,
 	 * absorb a wakeup if *uaddr does not match the desired values
 	 * while the syscall executes.
 	 */
+	if (READ_ONCE(futex_precheck_on) && futex_value_differs(uaddr, val))
+		return -EWOULDBLOCK;
 retry:
 	ret = get_futex_key(uaddr, flags, &q->key, FUTEX_READ);
 	if (unlikely(ret != 0))
