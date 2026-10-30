@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config APFS_FS
+	tristate "Apple File System (APFS) support"
+	depends on BLOCK
+	select LIBCRC32C
+	select CRC32
+	select ZLIB_INFLATE
+	help
+	  Read/write support for Apple File System volumes (Macs, iOS
+	  backups). Based on linux-apfs-rw by Ernesto A. Fernandez.
+	  Mounts read-only by default; see README.rst.
+
+	  To compile as a module, choose M here: apfs.

@@ -90,6 +90,7 @@ obj-$(CONFIG_SMBFS)		+= smb/
 obj-$(CONFIG_HPFS_FS)		+= hpfs/
 obj-$(CONFIG_NTFS_FS)		+= ntfs/
 obj-$(CONFIG_NTFS3_FS)		+= ntfs3/
+obj-$(CONFIG_APFS_FS)		+= apfs/
 obj-$(CONFIG_UFS_FS)		+= ufs/
 obj-$(CONFIG_JFFS2_FS)		+= jffs2/
 obj-$(CONFIG_UBIFS_FS)		+= ubifs/
