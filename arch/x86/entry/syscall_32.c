@@ -8,6 +8,8 @@
 #include <linux/entry-common.h>
 #include <linux/nospec.h>
 #include <linux/uaccess.h>
+#include <linux/sysctl.h>
+#include <linux/wolos_compat.h>
 #include <asm/apic.h>
 #include <asm/traps.h>
 #include <asm/cpufeature.h>
@@ -58,6 +60,41 @@ static __always_inline long syscall_32_enter(struct pt_regs *regs)
 
 	return (int)regs->orig_ax;
 }
+
+#ifdef CONFIG_WOLOS_NO_INT80_64
+/* abi.int80_64: 0 (default) makes int $0x80 from 64-bit code return -ENOSYS. */
+static int sysctl_int80_64;
+
+static const struct ctl_table int80_64_table[] = {
+	{
+		.procname	= "int80_64",
+		.data		= &sysctl_int80_64,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+};
+
+static int __init int80_64_sysctl_init(void)
+{
+	register_sysctl("abi", int80_64_table);
+	return 0;
+}
+subsys_initcall(int80_64_sysctl_init);
+
+/* True: the caller returns -ENOSYS without running the compat syscall. */
+static __always_inline bool int80_64_denied(struct pt_regs *regs)
+{
+	if (wolos_int80_allowed(user_64bit_mode(regs), READ_ONCE(sysctl_int80_64)))
+		return false;
+	regs->orig_ax = -1;
+	return true;
+}
+#else
+static __always_inline bool int80_64_denied(struct pt_regs *regs) { return false; }
+#endif
 
 #ifdef CONFIG_IA32_EMULATION
 bool __ia32_enabled __ro_after_init = !IS_ENABLED(CONFIG_IA32_EMULATION_DEFAULT_DISABLED);
@@ -157,6 +194,11 @@ __visible noinstr void do_int80_emulation(struct pt_regs *regs)
 	 */
 	regs->orig_ax = regs->ax & GENMASK(31, 0);
 	regs->ax = -ENOSYS;
+	if (unlikely(int80_64_denied(regs))) {
+		instrumentation_end();
+		syscall_exit_to_user_mode(regs);
+		return;
+	}
 
 	nr = syscall_32_enter(regs);
 
@@ -220,6 +262,11 @@ DEFINE_FREDENTRY_RAW(int80_emulation)
 	 */
 	regs->orig_ax = regs->ax & GENMASK(31, 0);
 	regs->ax = -ENOSYS;
+	if (unlikely(int80_64_denied(regs))) {
+		instrumentation_end();
+		syscall_exit_to_user_mode(regs);
+		return;
+	}
 
 	nr = syscall_32_enter(regs);
 
