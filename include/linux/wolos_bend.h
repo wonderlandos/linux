@@ -133,16 +133,29 @@ bool bend_set_enabled(bool on);
 
 struct page;
 #ifdef CONFIG_WOLOS_BEND
+/* Smallest folio (pages) cleared in parallel; UINT_MAX while off. */
+extern unsigned int bend_clear_min_pages;
 /* Piece size for a parallel clear of @nr pages; 0 = clear serially. */
 unsigned long bend_clear_pages_grain(unsigned long nr);
-/* Clears @nr pages on idle CPUs and returns true, or returns false. */
-bool bend_clear_user_highpages(struct page *page, unsigned long addr, unsigned int nr);
+bool __bend_clear_user_highpages(struct page *page, unsigned long addr, unsigned int nr);
+void bend_clear_update(void);
+
+/* Clears @nr pages on idle CPUs and returns true, or returns false.
+ * Small folios cost one compare and one branch. */
+static inline bool bend_clear_user_highpages(struct page *page, unsigned long addr,
+					     unsigned int nr)
+{
+	if (likely(nr < READ_ONCE(bend_clear_min_pages)))
+		return false;
+	return __bend_clear_user_highpages(page, addr, nr);
+}
 #else
 static inline bool bend_clear_user_highpages(struct page *page, unsigned long addr,
 					     unsigned int nr)
 {
 	return false;
 }
+static inline void bend_clear_update(void) { }
 #endif
 
 #endif /* _LINUX_WOLOS_BEND_H */

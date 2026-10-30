@@ -6,6 +6,7 @@
 #include <linux/highmem.h>
 #include <linux/mm.h>
 #include <linux/moduleparam.h>
+#include <linux/sizes.h>
 #include <linux/wolos_bend.h>
 
 #undef MODULE_PARAM_PREFIX
@@ -13,7 +14,30 @@
 
 /* Below this many KiB the clear stays on the faulting CPU (0: never split). */
 static unsigned int clear_min_kb = 4096;
-module_param(clear_min_kb, uint, 0644);
+unsigned int bend_clear_min_pages __read_mostly = SZ_4M / PAGE_SIZE;
+
+void bend_clear_update(void)
+{
+	unsigned int kb = READ_ONCE(clear_min_kb);
+
+	WRITE_ONCE(bend_clear_min_pages, kb && bend_enabled() ?
+		   max(1u, kb / (unsigned int)(PAGE_SIZE / SZ_1K)) : UINT_MAX);
+}
+
+static int clear_min_set(const char *val, const struct kernel_param *kp)
+{
+	int ret = param_set_uint(val, kp);
+
+	if (!ret)
+		bend_clear_update();
+	return ret;
+}
+
+static const struct kernel_param_ops clear_min_ops = {
+	.set = clear_min_set,
+	.get = param_get_uint,
+};
+module_param_cb(clear_min_kb, &clear_min_ops, &clear_min_kb, 0644);
 MODULE_PARM_DESC(clear_min_kb, "Clear user folios of at least this size on idle CPUs (KiB, 0 off)");
 
 static unsigned int clear_grain_kb = 512;
@@ -50,7 +74,7 @@ unsigned long bend_clear_pages_grain(unsigned long nr)
 	return grain;
 }
 
-bool bend_clear_user_highpages(struct page *page, unsigned long addr, unsigned int nr)
+bool __bend_clear_user_highpages(struct page *page, unsigned long addr, unsigned int nr)
 {
 	struct bend_clear c = { .page = page, .addr = addr };
 	struct bend_job job = { .fn = bend_clear_fn, .arg = &c, .start = 0, .end = nr };
