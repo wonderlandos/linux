@@ -46,6 +46,7 @@
 #include <linux/tty.h>
 #include <linux/uaccess.h>
 #include <linux/vt_kern.h>
+#include <linux/wolos_policy.h>
 
 #include <asm/irq_regs.h>
 
@@ -1583,6 +1584,20 @@ static void kbd_keycode(unsigned int keycode, int down, bool hw_raw)
 static void kbd_event(struct input_handle *handle, unsigned int event_type,
 		      unsigned int event_code, int value)
 {
+	struct vc_data *vc = vc_cons[fg_console].d;
+
+	/*
+	 * WolKernel: a graphical session (K_OFF + KD_GRAPHICS) reads evdev
+	 * itself. Track key_down for the switch back to a text VT, skip the
+	 * keymap, the LED tasklet and the console work.
+	 */
+	if (vc && wolos_kbd_bypass(kbd_table[fg_console].kbdmode == VC_OFF,
+				   vc->vc_mode == KD_GRAPHICS)) {
+		if (event_type == EV_KEY && event_code <= KEY_MAX)
+			assign_bit(event_code, key_down, value);
+		return;
+	}
+
 	/* We are called with interrupts disabled, just take the lock */
 	scoped_guard(spinlock, &kbd_event_lock) {
 		if (event_type == EV_MSC && event_code == MSC_RAW &&
