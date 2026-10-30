@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /* KUnit: WolKernel policy decisions (include/linux/wolos_policy.h). */
 #include <kunit/test.h>
+#include <linux/limits.h>
 #include <linux/wolos_policy.h>
 
 static void tsc_trust(struct kunit *t)
@@ -39,7 +40,25 @@ static void oom_bias(struct kunit *t)
 			wolos_oom_bias(800, 8000, true, false));
 }
 
+static void input_boost(struct kunit *t)
+{
+	unsigned long gap = 50;
+
+	KUNIT_EXPECT_TRUE(t, wolos_boost_should_fire(1000, 950, gap));
+	KUNIT_EXPECT_FALSE(t, wolos_boost_should_fire(1000, 951, gap));	/* rate limit */
+	/* across the jiffies wrap */
+	KUNIT_EXPECT_TRUE(t, wolos_boost_should_fire(10, ULONG_MAX - 40, gap));
+	KUNIT_EXPECT_FALSE(t, wolos_boost_should_fire(5, ULONG_MAX - 40, gap));
+
+	KUNIT_EXPECT_EQ(t, wolos_boost_floor(100, 200, 1024, 60), 614UL);
+	KUNIT_EXPECT_EQ(t, wolos_boost_floor(200, 200, 1024, 60), 0UL);	/* window closed */
+	KUNIT_EXPECT_EQ(t, wolos_boost_floor(300, 200, 1024, 60), 0UL);
+	KUNIT_EXPECT_EQ(t, wolos_boost_floor(100, 200, 1024, 250), 1024UL);	/* clamped */
+	KUNIT_EXPECT_EQ(t, wolos_boost_floor(ULONG_MAX - 5, 10, 1000, 50), 500UL); /* wrap */
+}
+
 static struct kunit_case wolos_policy_cases[] = {
+	KUNIT_CASE(input_boost),
 	KUNIT_CASE(tsc_trust),
 	KUNIT_CASE(kbd_bypass),
 	KUNIT_CASE(oom_bias),

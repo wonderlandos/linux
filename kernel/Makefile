@@ -49,6 +49,7 @@ CFLAGS_kcov.o := $(call cc-option, -fno-conserve-stack) -fno-stack-protector
 
 obj-y += sched/
 obj-$(CONFIG_WOLOS_HINTS) += wolos_hints.o
+obj-$(CONFIG_WOLOS_INPUT_BOOST) += wolos_input_boost.o
 obj-y += locking/
 obj-y += power/
 obj-y += printk/
