@@ -20,6 +20,7 @@
 #include <linux/swab.h>
 #include <linux/bitops.h>
 #include <linux/slab.h>
+#include <kunit/visibility.h>
 #include "slab.h"
 #include <linux/vmalloc.h>
 #include <linux/proc_fs.h>
@@ -7991,6 +7992,43 @@ static int init_kmem_cache_nodes(struct kmem_cache *s)
 	return 1;
 }
 
+/*
+ * WolKernel: bigger per-CPU sheaves. The base capacity mirrors the old per-CPU
+ * partial sizing; on desktop churn (pipes, sockets, filp, dentry) a CPU drains
+ * a 26-object sheaf in a few hundred syscalls and goes to the node barn (a
+ * spinlock shared by every CPU). slub_sheaf_scale=N multiplies the base
+ * capacity (1..4, default 2); slub_sheaf_scale=1 is the stock size.
+ */
+static unsigned int slub_sheaf_scale __ro_after_init = 2;
+
+static int __init setup_slub_sheaf_scale(char *str)
+{
+	unsigned int v;
+
+	if (!kstrtouint(str, 0, &v))
+		slub_sheaf_scale = clamp(v, 1U, 4U);
+	return 0;
+}
+early_param("slub_sheaf_scale", setup_slub_sheaf_scale);
+
+/* Base sheaf capacity for an object of @size bytes, before rounding. */
+VISIBLE_IF_KUNIT unsigned int slub_sheaf_base_capacity(unsigned int size,
+						       unsigned int scale)
+{
+	unsigned int capacity;
+
+	if (size >= PAGE_SIZE)
+		capacity = 4;
+	else if (size >= 1024)
+		capacity = 12;
+	else if (size >= 256)
+		capacity = 26;
+	else
+		capacity = 60;
+	return capacity * clamp(scale, 1U, 4U);
+}
+EXPORT_SYMBOL_IF_KUNIT(slub_sheaf_base_capacity);
+
 static unsigned int calculate_sheaf_capacity(struct kmem_cache *s,
 					     struct kmem_cache_args *args)
 
@@ -8016,14 +8054,7 @@ static unsigned int calculate_sheaf_capacity(struct kmem_cache *s,
 	 * two percpu sheaves) as what was used for percpu partial slabs, which
 	 * should result in similar lock contention (barn or list_lock)
 	 */
-	if (s->size >= PAGE_SIZE)
-		capacity = 4;
-	else if (s->size >= 1024)
-		capacity = 12;
-	else if (s->size >= 256)
-		capacity = 26;
-	else
-		capacity = 60;
+	capacity = slub_sheaf_base_capacity(s->size, slub_sheaf_scale);
 
 	/* Increment capacity to make sheaf exactly a kmalloc size bucket */
 	size = struct_size_t(struct slab_sheaf, objects, capacity);

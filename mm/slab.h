@@ -945,4 +945,8 @@ static inline bool slub_debug_orig_size(struct kmem_cache *s)
 void skip_orig_size_check(struct kmem_cache *s, const void *object);
 #endif
 
+#if IS_ENABLED(CONFIG_KUNIT)
+unsigned int slub_sheaf_base_capacity(unsigned int size, unsigned int scale);
+#endif
+
 #endif /* MM_SLAB_H */

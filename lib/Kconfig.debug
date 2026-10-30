@@ -3016,6 +3016,11 @@ config SHDI3_KUNIT_TEST
 	  shift left, arithmetic shift right and logical shift right,
 	  respectively, on a 32-bit CPUs.
 
+config SLUB_SHEAF_KUNIT_TEST
+	tristate "KUnit test for the WolKernel SLUB sheaf scale" if !KUNIT_ALL_TESTS
+	depends on KUNIT && !SLUB_TINY
+	default KUNIT_ALL_TESTS
+
 config SLUB_KUNIT_TEST
 	tristate "KUnit test for SLUB cache error detection" if !KUNIT_ALL_TESTS
 	depends on SLUB_DEBUG && KUNIT
