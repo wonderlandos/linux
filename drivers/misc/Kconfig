@@ -464,6 +464,11 @@ config NTSYNC
 
 	  If unsure, say N.
 
+config NTSYNC_KUNIT_TEST
+	bool "KUnit test for the WolKernel ntsync inline wait buffer" if !KUNIT_ALL_TESTS
+	depends on NTSYNC && KUNIT=y
+	default KUNIT_ALL_TESTS
+
 config VCPU_STALL_DETECTOR
 	tristate "Guest vCPU stall detector"
 	depends on OF && HAS_IOMEM
