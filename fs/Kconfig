@@ -111,6 +111,11 @@ config EXPORTFS_BLOCK_OPS
 	  This option enables the export operations for a filesystem to support
 	  external block IO.
 
+config PIPE_WAKE_KUNIT_TEST
+	bool "KUnit test for the WolKernel pipe wake check" if !KUNIT_ALL_TESTS
+	depends on KUNIT=y
+	default KUNIT_ALL_TESTS
+
 config FILE_LOCKING
 	bool "Enable POSIX file locking API" if EXPERT
 	default y
