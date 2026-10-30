@@ -119,6 +119,37 @@ struct ntsync_q {
 	struct ntsync_q_entry entries[];
 };
 
+/*
+ * WolKernel: Wine waits on one to three objects almost always. A wait with up
+ * to NTSYNC_Q_INLINE entries (alert included) uses this on-stack buffer
+ * instead of a kmalloc/kfree pair per wait; the queue entries live until the
+ * waiter has unqueued itself, which happens before it returns.
+ * Off: /sys/module/ntsync/parameters/inline_wait=0.
+ */
+#define NTSYNC_Q_INLINE 4
+
+struct ntsync_q_buf {
+	u8 raw[struct_size_t(struct ntsync_q, entries, NTSYNC_Q_INLINE)]
+		__aligned(__alignof__(struct ntsync_q));
+};
+
+static bool ntsync_inline_wait __read_mostly = true;
+module_param_named(inline_wait, ntsync_inline_wait, bool, 0644);
+
+/* The wait's q: the caller's buffer when it fits and the switch is on, else the heap. */
+static struct ntsync_q *ntsync_q_get(struct ntsync_q_buf *buf, __u32 total_count)
+{
+	if (READ_ONCE(ntsync_inline_wait) && total_count <= NTSYNC_Q_INLINE)
+		return (struct ntsync_q *)buf->raw;
+	return kmalloc(struct_size_t(struct ntsync_q, entries, total_count), GFP_KERNEL);
+}
+
+static void ntsync_q_put(struct ntsync_q_buf *buf, struct ntsync_q *q)
+{
+	if (q != (struct ntsync_q *)buf->raw)
+		kfree(q);
+}
+
 struct ntsync_device {
 	/*
 	 * Wait-all operations must atomically grab all objects, and be totally
@@ -863,7 +894,7 @@ static int ntsync_schedule(const struct ntsync_q *q, const struct ntsync_wait_ar
  */
 static int setup_wait(struct ntsync_device *dev,
 		      const struct ntsync_wait_args *args, bool all,
-		      struct ntsync_q **ret_q)
+		      struct ntsync_q_buf *buf, struct ntsync_q **ret_q)
 {
 	int fds[NTSYNC_MAX_WAIT_COUNT + 1];
 	const __u32 count = args->count;
@@ -890,7 +921,7 @@ static int setup_wait(struct ntsync_device *dev,
 	if (args->alert)
 		fds[count] = args->alert;
 
-	q = kmalloc_flex(*q, entries, total_count);
+	q = ntsync_q_get(buf, total_count);
 	if (!q)
 		return -ENOMEM;
 	q->task = current;
@@ -928,7 +959,7 @@ static int setup_wait(struct ntsync_device *dev,
 err:
 	for (j = 0; j < i; j++)
 		put_obj(q->entries[j].obj);
-	kfree(q);
+	ntsync_q_put(buf, q);
 	return -EINVAL;
 }
 
@@ -949,6 +980,7 @@ static void try_wake_any_obj(struct ntsync_obj *obj)
 
 static int ntsync_wait_any(struct ntsync_device *dev, void __user *argp)
 {
+	struct ntsync_q_buf qbuf;
 	struct ntsync_wait_args args;
 	__u32 i, total_count;
 	struct ntsync_q *q;
@@ -959,7 +991,7 @@ static int ntsync_wait_any(struct ntsync_device *dev, void __user *argp)
 	if (copy_from_user(&args, argp, sizeof(args)))
 		return -EFAULT;
 
-	ret = setup_wait(dev, &args, false, &q);
+	ret = setup_wait(dev, &args, false, &qbuf, &q);
 	if (ret < 0)
 		return ret;
 
@@ -1027,12 +1059,13 @@ static int ntsync_wait_any(struct ntsync_device *dev, void __user *argp)
 		ret = -ETIMEDOUT;
 	}
 
-	kfree(q);
+	ntsync_q_put(&qbuf, q);
 	return ret;
 }
 
 static int ntsync_wait_all(struct ntsync_device *dev, void __user *argp)
 {
+	struct ntsync_q_buf qbuf;
 	struct ntsync_wait_args args;
 	struct ntsync_q *q;
 	int signaled;
@@ -1042,7 +1075,7 @@ static int ntsync_wait_all(struct ntsync_device *dev, void __user *argp)
 	if (copy_from_user(&args, argp, sizeof(args)))
 		return -EFAULT;
 
-	ret = setup_wait(dev, &args, true, &q);
+	ret = setup_wait(dev, &args, true, &qbuf, &q);
 	if (ret < 0)
 		return ret;
 
@@ -1143,7 +1176,7 @@ static int ntsync_wait_all(struct ntsync_device *dev, void __user *argp)
 		ret = -ETIMEDOUT;
 	}
 
-	kfree(q);
+	ntsync_q_put(&qbuf, q);
 	return ret;
 }
 
@@ -1213,3 +1246,7 @@ module_misc_device(ntsync_misc);
 MODULE_AUTHOR("Elizabeth Figura <zfigura@codeweavers.com>");
 MODULE_DESCRIPTION("Kernel driver for NT synchronization primitives");
 MODULE_LICENSE("GPL");
+
+#if IS_ENABLED(CONFIG_NTSYNC_KUNIT_TEST)
+#include "ntsync_kunit.c"
+#endif
