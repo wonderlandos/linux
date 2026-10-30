@@ -54,4 +54,23 @@ static inline long wolos_oom_bias(long points, unsigned long totalpages,
 	return points;
 }
 
+/*
+ * Input boost: fire at most once per @gap jiffies (signed difference, so it
+ * survives jiffies wrap). @last must start at least @gap before now.
+ */
+static inline bool wolos_boost_should_fire(unsigned long now, unsigned long last,
+					   unsigned long gap)
+{
+	return (long)(now - last - gap) >= 0;
+}
+
+/* Utilization floor while the boost window (until @until) is open, else 0. */
+static inline unsigned long wolos_boost_floor(unsigned long now, unsigned long until,
+					      unsigned long cap, unsigned int pct)
+{
+	if ((long)(until - now) <= 0)
+		return 0;
+	return cap * (pct > 100 ? 100 : pct) / 100;
+}
+
 #endif

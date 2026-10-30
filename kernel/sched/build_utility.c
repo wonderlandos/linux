@@ -20,6 +20,7 @@
 #include <linux/sched/task_stack.h>
 
 #include <linux/cpufreq.h>
+#include <linux/wolos.h>
 #include <linux/cpumask_api.h>
 #include <linux/cpuset.h>
 #include <linux/ctype.h>
