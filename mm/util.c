@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
+#include <linux/wolos_compat.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/string.h>
@@ -781,7 +782,11 @@ EXPORT_SYMBOL(folio_mc_copy);
 int sysctl_overcommit_memory __read_mostly = OVERCOMMIT_GUESS;
 static int sysctl_overcommit_ratio __read_mostly = 50;
 static unsigned long sysctl_overcommit_kbytes __read_mostly;
+#ifdef CONFIG_WOLOS_HINTS
+int sysctl_max_map_count __read_mostly = WOLOS_MAX_MAP_COUNT;
+#else
 int sysctl_max_map_count __read_mostly = DEFAULT_MAX_MAP_COUNT;
+#endif
 unsigned long sysctl_user_reserve_kbytes __read_mostly = 1UL << 17; /* 128MB */
 unsigned long sysctl_admin_reserve_kbytes __read_mostly = 1UL << 13; /* 8MB */
 

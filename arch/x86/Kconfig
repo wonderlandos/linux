@@ -3106,6 +3106,24 @@ config IA32_EMULATION_DEFAULT_DISABLED
 	  processes and access to 32-bit syscalls. If unsure, leave it to its
 	  default value.
 
+config WOLOS_RETBLEED_STUFF
+	bool "Retbleed: call-depth stuffing by default on Intel without eIBRS"
+	depends on MITIGATION_CALL_DEPTH_TRACKING
+	default y
+	help
+	  retbleed=auto picks stuffing instead of IBRS on Intel CPUs without
+	  enhanced IBRS. IBRS costs 10-30% on syscall-heavy work there.
+	  retbleed=ibrs restores IBRS.
+
+config WOLOS_NO_INT80_64
+	bool "int $0x80 from 64-bit code returns -ENOSYS"
+	depends on IA32_EMULATION && SYSCTL
+	default y
+	help
+	  32-bit programs keep int $0x80. 64-bit programs only reach the compat
+	  syscall table through it from hand-written assembly or exploits.
+	  The abi.int80_64=1 sysctl restores it.
+
 config X86_X32_ABI
 	bool "x32 ABI for 64-bit mode"
 	depends on X86_64
