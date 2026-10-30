@@ -392,6 +392,8 @@ static void futex_spin_wait(struct futex_q *q)
 
 	if (num_online_cpus() < 2)
 		return;
+	/* A private hash is freed by RCU after a rehash: keep hb valid. */
+	guard(rcu)();
 	lock = READ_ONCE(q->lock_ptr);
 	if (!lock)	/* already woken */
 		return;
