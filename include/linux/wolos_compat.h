@@ -9,10 +9,11 @@
 #include <linux/types.h>
 
 /*
- * Audit: does a task need the syscall entry/exit audit work? Only when audit
+ * Audit: does a task keep the syscall entry/exit audit work? Only when audit
  * may record its syscalls, i.e. its filter state is not DISABLED and at least
  * one syscall rule exists. With audit enabled and no rules the hooks would
- * only build a dummy context on every syscall.
+ * only build a dummy context on every syscall. Lazy audit asks this at the
+ * end of the task's own syscall exit work (CONFIG_WOLOS_AUDIT_LAZY).
  */
 static inline bool wolos_audit_needs_work(bool lazy, bool task_disabled,
 					  int n_rules)
@@ -20,6 +21,21 @@ static inline bool wolos_audit_needs_work(bool lazy, bool task_disabled,
 	if (task_disabled)
 		return false;
 	return !lazy || n_rules > 0;
+}
+
+/*
+ * Audit: may the syscall entry hook build the syscall context? The generic
+ * entry code calls it for any entry work (seccomp, ptrace, tracepoints) once
+ * the task has an audit context, but runs the exit hook only with the audit
+ * work bit. Under lazy audit a task can have a context without the bit, so
+ * the entry builds only with the bit; otherwise the context stays in use and
+ * the next entry hits the "context != AUDIT_CTX_UNUSED" warning. Only the
+ * task clears its own bit, at the end of its exit work, so a bit seen at entry
+ * is still set at exit and the two hooks pair.
+ */
+static inline bool wolos_audit_entry_builds(bool lazy, bool audit_work)
+{
+	return !lazy || audit_work;
 }
 
 /*

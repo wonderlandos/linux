@@ -1081,15 +1081,12 @@ int audit_alloc(struct task_struct *tsk)
 
 	audit_set_context(tsk, context);
 	/*
-	 * No syscall rules: keep the context (a rule added later needs it) but
-	 * leave the task off the syscall slow path; audit_rules_changed() puts
-	 * it back on.
+	 * Start with the syscall work, as stock does: the task is not on the
+	 * task list yet, so audit_lazy_rules_added() could miss it. Under lazy
+	 * audit its first return to user space runs the exit work, which drops
+	 * the work again while there are no syscall rules.
 	 */
-	if (wolos_audit_needs_work(IS_ENABLED(CONFIG_WOLOS_AUDIT_LAZY), false,
-				   READ_ONCE(audit_n_rules)))
-		set_task_syscall_work(tsk, SYSCALL_AUDIT);
-	else
-		context->dummy = 1;
+	set_task_syscall_work(tsk, SYSCALL_AUDIT);
 	return 0;
 }
 
@@ -1115,7 +1112,7 @@ void audit_lazy_rules_added(void)
 /* The task drops its own syscall work once no syscall rules are left. */
 static void audit_lazy_exit(void)
 {
-	if (READ_ONCE(audit_n_rules))
+	if (wolos_audit_needs_work(true, false, READ_ONCE(audit_n_rules)))
 		return;
 	clear_task_syscall_work(current, SYSCALL_AUDIT);
 	smp_mb();
@@ -2034,6 +2031,16 @@ void __audit_syscall_entry(int major, unsigned long a1, unsigned long a2,
 	enum audit_state     state;
 
 	if (!audit_enabled || !context)
+		return;
+
+	/*
+	 * The entry code calls us for any entry work (seccomp, ptrace,
+	 * tracepoints) once there is a context, but runs the exit hook only
+	 * with the audit work: without it, build nothing, or the context stays
+	 * in use past this syscall.
+	 */
+	if (!wolos_audit_entry_builds(IS_ENABLED(CONFIG_WOLOS_AUDIT_LAZY),
+				      test_task_syscall_work(current, SYSCALL_AUDIT)))
 		return;
 
 	WARN_ON(context->context != AUDIT_CTX_UNUSED);
