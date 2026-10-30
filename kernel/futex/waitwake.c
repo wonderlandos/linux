@@ -609,16 +609,68 @@ retry:
  * Sleep if and only if the timeout hasn't expired and no futex on the list has
  * been woken up.
  */
+static bool futex_any_woken(struct futex_vector *vs, unsigned int count)
+{
+	for (; count; count--, vs++) {
+		if (!READ_ONCE(vs->q.lock_ptr))
+			return true;
+	}
+	return false;
+}
+
+/*
+ * WolKernel: the FUTEX_WAIT adaptive spin for futex_waitv() too, scored on
+ * the first futex's bucket. Wine/Proton fsync hand-offs between game threads
+ * land within a few microseconds. Off: futex.waitv_spin=0 (or spin_ns=0).
+ */
+static bool futex_waitv_spin_on __read_mostly = true;
+module_param_named(waitv_spin, futex_waitv_spin_on, bool, 0644);
+
+static void futex_spin_wait_multiple(struct futex_vector *vs, unsigned int count)
+{
+	struct futex_hash_bucket *hb;
+	spinlock_t *lock;
+	unsigned int score;
+	u64 budget, end;
+	bool woke;
+
+	if (!READ_ONCE(futex_waitv_spin_on) || num_online_cpus() < 2)
+		return;
+	/* A private hash is freed by RCU after a rehash: keep hb valid. */
+	guard(rcu)();
+	lock = READ_ONCE(vs[0].q.lock_ptr);
+	if (!lock)
+		return;
+	hb = container_of(lock, struct futex_hash_bucket, lock);
+	score = READ_ONCE(hb->spin_score);
+	budget = futex_spin_budget(READ_ONCE(futex_spin_ns), score,
+				   single_task_running());
+	if (!budget) {
+		if (!score && !(get_random_u32() & 63))
+			WRITE_ONCE(hb->spin_score, 1);
+		return;
+	}
+	end = local_clock() + budget;
+	while (!futex_any_woken(vs, count) && !need_resched() &&
+	       !signal_pending(current) && local_clock() < end)
+		cpu_relax();
+	woke = futex_any_woken(vs, count);
+	if (futex_spin_next(score, woke) != score)
+		WRITE_ONCE(hb->spin_score, futex_spin_next(score, woke));
+}
+
 static void futex_sleep_multiple(struct futex_vector *vs, unsigned int count,
 				 struct hrtimer_sleeper *to)
 {
 	if (to && !hrtimer_sleeper_task_get(to))
 		return;
 
-	for (; count; count--, vs++) {
-		if (!READ_ONCE(vs->q.lock_ptr))
-			return;
-	}
+	if (futex_any_woken(vs, count))
+		return;
+
+	futex_spin_wait_multiple(vs, count);
+	if (futex_any_woken(vs, count))
+		return;
 
 	schedule();
 }
