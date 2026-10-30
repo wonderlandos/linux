@@ -496,6 +496,15 @@ source "lib/vdso/Kconfig"
 
 source "lib/fonts/Kconfig"
 
+config WOLOS_BEND
+	bool "wolos_bend: work-stealing fork/join and lock-free pools"
+	default y
+	help
+	  Small parallel primitives: link/subst by CAS, Chase-Lev deques with
+	  batched stealing, worker arenas, index pools with generations and
+	  a fork/join helper that borrows idle CPUs.  wolos_bend.enable=0
+	  makes every fork/join serial.
+
 config SG_SPLIT
 	def_bool n
 	help
