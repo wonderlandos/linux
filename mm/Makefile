@@ -71,6 +71,7 @@ obj-y += init-mm.o
 obj-y += memblock.o
 obj-y += $(memory-hotplug-y)
 obj-y += slub.o
+obj-$(CONFIG_SLUB_SHEAF_KUNIT_TEST) += slub_sheaf_kunit.o
 
 ifdef CONFIG_MMU
 	obj-$(CONFIG_ADVISE_SYSCALLS)	+= madvise.o
