@@ -80,6 +80,11 @@ struct btrfs_path {
 	bool search_for_extension:1;
 	/* Stop search if any locks need to be taken (for read) */
 	bool nowait:1;
+	/*
+	 * Internal to btrfs_insert_empty_items(): an insertion that stays inside
+	 * the leaf does not need a write lock on the parent, try without one.
+	 */
+	bool optimistic_insert:1;
 };
 
 #define BTRFS_PATH_AUTO_FREE(path_name)					\

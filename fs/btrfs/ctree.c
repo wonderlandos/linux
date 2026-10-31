@@ -7,6 +7,7 @@
 #include <linux/slab.h>
 #include <linux/rbtree.h>
 #include <linux/mm.h>
+#include <linux/moduleparam.h>
 #include <linux/error-injection.h>
 #include "messages.h"
 #include "ctree.h"
@@ -26,6 +27,11 @@
 #include "file-item.h"
 
 static struct kmem_cache *btrfs_path_cachep;
+
+static bool optimistic_insert = true;
+module_param(optimistic_insert, bool, 0644);
+MODULE_PARM_DESC(optimistic_insert,
+		 "Insert items without a write lock on the parent when the leaf has room");
 
 static int split_node(struct btrfs_trans_handle *trans, struct btrfs_root
 		      *root, struct btrfs_path *path, int level);
@@ -1833,6 +1839,23 @@ static inline int search_for_key_slot(const struct extent_buffer *eb,
 	return btrfs_bin_search(eb, search_low_slot, key, slot);
 }
 
+/*
+ * Whether inserting @ins_len bytes at @key into the write locked @leaf can
+ * reach the parent: the leaf must split, or the key becomes the new first key.
+ */
+static bool insert_needs_parent(const struct extent_buffer *leaf,
+				const struct btrfs_key *key, int ins_len)
+{
+	struct btrfs_disk_key first_key;
+
+	if (btrfs_leaf_free_space(leaf) < ins_len)
+		return true;
+	if (btrfs_header_nritems(leaf) == 0)
+		return true;
+	btrfs_item_key(leaf, &first_key, 0);
+	return btrfs_comp_keys(&first_key, key) > 0;
+}
+
 static int search_leaf(struct btrfs_trans_handle *trans,
 		       struct btrfs_root *root,
 		       const struct btrfs_key *key,
@@ -2038,8 +2061,18 @@ int btrfs_search_slot(struct btrfs_trans_handle *trans, struct btrfs_root *root,
 		/*
 		 * for inserting items, make sure we have a write lock on
 		 * level 1 so we can update keys
+		 *
+		 * An insertion that fits in the leaf and does not land in slot
+		 * 0 never touches level 1.  Try that first with a read lock on
+		 * level 1, which is what a cow search with ins_len == 0 holds,
+		 * so a task waiting for a busy leaf does not stall every other
+		 * task below the same node.  insert_needs_parent() restarts the
+		 * search with the write lock when the guess is wrong.
 		 */
 		write_lock_level = 1;
+		if (p->optimistic_insert && READ_ONCE(optimistic_insert) &&
+		    !p->keep_locks && !p->skip_locking)
+			write_lock_level = 0;
 	}
 
 	if (!cow)
@@ -2141,8 +2174,13 @@ cow_done:
 		}
 
 		if (level == 0) {
-			if (ins_len > 0)
-				ASSERT(write_lock_level >= 1);
+			if (ins_len > 0 && write_lock_level < 1 &&
+			    insert_needs_parent(b, key, ins_len)) {
+				write_lock_level = 1;
+				btrfs_release_path(p);
+				trace_btrfs_search_slot_restart(root, level, "insert_parent");
+				goto again;
+			}
 
 			ret = search_leaf(trans, root, key, p, ins_len, prev_cmp);
 			if (!p->search_for_split)
@@ -4197,6 +4235,7 @@ static void setup_items_for_insert(struct btrfs_trans_handle *trans,
 	 * can use them while we modify the leaf.
 	 */
 	if (path->slots[0] == 0) {
+		ASSERT(!path->locks[1] || path->locks[1] == BTRFS_WRITE_LOCK);
 		btrfs_cpu_key_to_disk(&disk_key, &batch->keys[0]);
 		fixup_low_keys(trans, path, &disk_key, 1);
 	}
@@ -4307,7 +4346,9 @@ int btrfs_insert_empty_items(struct btrfs_trans_handle *trans,
 	u32 total_size;
 
 	total_size = batch->total_data_size + (batch->nr * sizeof(struct btrfs_item));
+	path->optimistic_insert = true;
 	ret = btrfs_search_slot(trans, root, &batch->keys[0], path, total_size, 1);
+	path->optimistic_insert = false;
 	if (ret == 0)
 		return -EEXIST;
 	if (ret < 0)
