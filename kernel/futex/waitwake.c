@@ -399,6 +399,76 @@ bool futex_precheck_on __read_mostly = true;
 module_param_named(precheck, futex_precheck_on, bool, 0644);
 EXPORT_SYMBOL_IF_KUNIT(futex_precheck_on);
 
+static bool futex_prespin_on __read_mostly = true;
+module_param_named(prespin, futex_prespin_on, bool, 0644);
+
+static bool futex_prespin_begin(u64 *end)
+{
+	u64 budget;
+
+	if (!READ_ONCE(futex_prespin_on) || num_online_cpus() < 2)
+		return false;
+	budget = futex_prespin_budget(READ_ONCE(futex_spin_ns),
+				      current->futex.spin_score,
+				      single_task_running());
+	if (!budget)
+		return false;
+	*end = local_clock() + budget;
+	return true;
+}
+
+static __always_inline bool futex_prespin_goes_on(u64 end)
+{
+	return !need_resched() && !signal_pending(current) &&
+	       single_task_running() && local_clock() < end;
+}
+
+static void futex_prespin_end(bool hit)
+{
+	current->futex.spin_score = futex_spin_next(current->futex.spin_score, hit);
+}
+
+bool futex_waitv_prespin(const struct futex_waitv __user *uw, unsigned int nr,
+			 const struct __kernel_timespec __user *to)
+{
+	int scan = FUTEX_SCAN_MATCH;
+	u64 end;
+
+	if (!futex_prespin_begin(&end))
+		return false;
+	while (scan == FUTEX_SCAN_MATCH && futex_prespin_goes_on(end)) {
+		cpu_relax();
+		scan = futex_waitv_scan(uw, nr, to);
+	}
+	futex_prespin_end(scan == FUTEX_SCAN_DIFFERS);
+	return scan == FUTEX_SCAN_DIFFERS;
+}
+
+static bool futex_wait_prespin(u32 __user *uaddr, u32 val)
+{
+	bool differs = false;
+	u64 end;
+
+	if (!futex_prespin_begin(&end))
+		return false;
+	while (!differs && futex_prespin_goes_on(end)) {
+		cpu_relax();
+		differs = futex_value_differs(uaddr, val);
+	}
+	futex_prespin_end(differs);
+	return differs;
+}
+
+/* Every sleep teaches the score, or a task that sleeps never learns to spin. */
+static void futex_sleep_learn(u64 start)
+{
+	if (READ_ONCE(futex_prespin_on))
+		current->futex.spin_score =
+			futex_spin_slept(current->futex.spin_score,
+					 local_clock() - start,
+					 READ_ONCE(futex_spin_ns));
+}
+
 static void futex_spin_wait(struct futex_q *q)
 {
 	struct futex_hash_bucket *hb;
@@ -450,9 +520,14 @@ void futex_do_wait(struct futex_q *q, struct hrtimer_sleeper *timeout)
 		 * flagged for rescheduling. Only call schedule if there
 		 * is no timeout, or if it has yet to expire.
 		 */
-		futex_spin_wait(q);
-		if (!timeout || hrtimer_sleeper_task_get(timeout))
+		if (!READ_ONCE(futex_prespin_on))
+			futex_spin_wait(q);
+		if (!timeout || hrtimer_sleeper_task_get(timeout)) {
+			u64 start = local_clock();
+
 			schedule();
+			futex_sleep_learn(start);
+		}
 	}
 	__set_current_state(TASK_RUNNING);
 }
@@ -658,17 +733,23 @@ static void futex_spin_wait_multiple(struct futex_vector *vs, unsigned int count
 static void futex_sleep_multiple(struct futex_vector *vs, unsigned int count,
 				 struct hrtimer_sleeper *to)
 {
+	u64 start;
+
 	if (to && !hrtimer_sleeper_task_get(to))
 		return;
 
 	if (futex_any_woken(vs, count))
 		return;
 
-	futex_spin_wait_multiple(vs, count);
-	if (futex_any_woken(vs, count))
-		return;
+	if (!READ_ONCE(futex_prespin_on)) {
+		futex_spin_wait_multiple(vs, count);
+		if (futex_any_woken(vs, count))
+			return;
+	}
 
+	start = local_clock();
 	schedule();
+	futex_sleep_learn(start);
 }
 
 /**
@@ -828,7 +909,8 @@ int __futex_wait(u32 __user *uaddr, unsigned int flags, u32 val,
 	if (!bitset)
 		return -EINVAL;
 
-	if (READ_ONCE(futex_precheck_on) && futex_value_differs(uaddr, val))
+	if (READ_ONCE(futex_precheck_on) &&
+	    (futex_value_differs(uaddr, val) || futex_wait_prespin(uaddr, val)))
 		return -EWOULDBLOCK;
 
 	q = futex_q_init;

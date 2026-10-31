@@ -34,6 +34,29 @@ static void score_moves(struct kunit *t)
 	KUNIT_EXPECT_EQ(t, s, 1U);
 }
 
+static void prespin_budget_cases(struct kunit *t)
+{
+	KUNIT_EXPECT_EQ(t, futex_prespin_budget(0, 8, true), 0ULL);
+	KUNIT_EXPECT_EQ(t, futex_prespin_budget(4000, 0, true), 0ULL);
+	KUNIT_EXPECT_EQ(t, futex_prespin_budget(4000, 8, false), 0ULL);
+	/* any score is the whole budget: a scaled one cannot reach a sleeping partner */
+	KUNIT_EXPECT_EQ(t, futex_prespin_budget(4000, 1, true), 4000ULL);
+	KUNIT_EXPECT_EQ(t, futex_prespin_budget(4000, 8, true), 4000ULL);
+}
+
+static void short_sleep_raises_score(struct kunit *t)
+{
+	KUNIT_EXPECT_EQ(t, futex_spin_slept(0, 3000, 4000), 1U);
+	KUNIT_EXPECT_EQ(t, futex_spin_slept(0, 7999, 4000), 1U);
+	/* only rearms: a wait just over the budget must not spin every time */
+	KUNIT_EXPECT_EQ(t, futex_spin_slept(2, 100, 4000), 2U);
+	/* a long sleep says nothing */
+	KUNIT_EXPECT_EQ(t, futex_spin_slept(3, 8000, 4000), 3U);
+	KUNIT_EXPECT_EQ(t, futex_spin_slept(0, 1000000, 4000), 0U);
+	/* spin_ns=0: never */
+	KUNIT_EXPECT_EQ(t, futex_spin_slept(0, 0, 0), 0U);
+}
+
 static void waitv_inline_bound(struct kunit *t)
 {
 	bool saved = futex_waitv_inline_on;
@@ -212,6 +235,8 @@ static struct kunit_case futex_spin_cases[] = {
 	KUNIT_CASE(budget_off_cases),
 	KUNIT_CASE(budget_scales_with_score),
 	KUNIT_CASE(score_moves),
+	KUNIT_CASE(prespin_budget_cases),
+	KUNIT_CASE(short_sleep_raises_score),
 	KUNIT_CASE(waitv_inline_bound),
 	KUNIT_CASE(precheck_reads_user_value),
 	KUNIT_CASE(waitv_scan_table),

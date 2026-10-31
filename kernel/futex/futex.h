@@ -182,6 +182,34 @@ static inline unsigned int futex_spin_next(unsigned int score, bool woke)
 }
 
 /*
+ * WolKernel pre-queue spin: while a task's waits end within a few microseconds
+ * it polls the user words before it queues, so a hand-off costs neither side a
+ * key, a bucket lock or a wakeup, and the waker finds nobody to wake. Nothing
+ * is queued, so a word that changes returns -EWOULDBLOCK, the answer the wait
+ * would give had it started a moment later; when the budget runs out the wait
+ * queues as usual and sees every later wake. No hash exists yet, so the score
+ * lives in the task. Any score grants the whole budget: a budget scaled down
+ * can never reach a partner that is itself asleep, and both sides stay stuck
+ * in the slow regime. Misses halve the score. Pure policy, see spin_kunit.c.
+ */
+static inline u64 futex_prespin_budget(unsigned int spin_ns, unsigned int score,
+				       bool cpu_alone)
+{
+	return score && cpu_alone ? spin_ns : 0;
+}
+
+/*
+ * A sleep this short says a spin may catch the next wake, so it rearms a task
+ * that stopped spinning. It does not raise a score that is still spinning: a
+ * wait a little over the budget would then miss and burn the budget every time.
+ */
+static inline unsigned int futex_spin_slept(unsigned int score, u64 slept_ns,
+					    unsigned int spin_ns)
+{
+	return !score && slept_ns < 2ULL * spin_ns ? 1 : score;
+}
+
+/*
  * Priority Inheritance state:
  */
 struct futex_pi_state {
@@ -568,6 +596,9 @@ static __always_inline int futex_waitv_scan(const struct futex_waitv __user *uw,
 full:
 	return FUTEX_SCAN_FULL;
 }
+
+extern bool futex_waitv_prespin(const struct futex_waitv __user *uw, unsigned int nr,
+				const struct __kernel_timespec __user *to);
 
 extern int futex_parse_waitv(struct futex_vector *futexv,
 			     struct futex_waitv __user *uwaitv,

@@ -373,9 +373,14 @@ SYSCALL_DEFINE5(futex_waitv, struct futex_waitv __user *, waiters,
 		return -EINVAL;
 
 	if (READ_ONCE(futex_precheck_on) &&
-	    (!timeout || clockid == CLOCK_MONOTONIC || clockid == CLOCK_REALTIME) &&
-	    futex_waitv_scan(waiters, nr_futexes, timeout) == FUTEX_SCAN_DIFFERS)
-		return -EWOULDBLOCK;
+	    (!timeout || clockid == CLOCK_MONOTONIC || clockid == CLOCK_REALTIME)) {
+		int scan = futex_waitv_scan(waiters, nr_futexes, timeout);
+
+		if (scan == FUTEX_SCAN_DIFFERS ||
+		    (scan == FUTEX_SCAN_MATCH &&
+		     futex_waitv_prespin(waiters, nr_futexes, timeout)))
+			return -EWOULDBLOCK;
+	}
 
 	return futex_waitv_block(waiters, nr_futexes, timeout, clockid);
 }
