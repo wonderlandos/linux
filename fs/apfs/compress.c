@@ -8,9 +8,7 @@
 #include <linux/mutex.h>
 
 #include "apfs.h"
-#include "libzbitmap.h"
-#include "lzfse/lzfse.h"
-#include "lzfse/lzvn_decode_base.h"
+#include "compress_codec.h"
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)
 
@@ -208,6 +206,8 @@ static int apfs_compress_file_read_block(struct apfs_compress_file_data *fd, lof
 			bsize = APFS_COMPRESS_BLOCK;
 
 		coffs = le32_to_cpu(blks[0]);
+		if (le32_to_cpu(blks[1]) <= coffs)
+			return -EFSCORRUPTED;
 		csize = le32_to_cpu(blks[1]) - coffs;
 	} else {
 		/*
@@ -223,97 +223,28 @@ static int apfs_compress_file_read_block(struct apfs_compress_file_data *fd, lof
 
 		/* The first few bytes are the decmpfs header */
 		coffs = sizeof(struct apfs_compress_hdr);
+		if (comp_data->size <= sizeof(struct apfs_compress_hdr))
+			return -EFSCORRUPTED;
 		csize = comp_data->size - sizeof(struct apfs_compress_hdr);
 	}
 
+	/* Incompressible blocks are stored whole, plus a marker byte */
+	if (csize == 0 || csize > APFS_COMPRESS_BLOCK + 64) {
+		apfs_err(sb, "bad compressed block size");
+		return -EFSCORRUPTED;
+	}
 	cdata = kvmalloc(csize, GFP_KERNEL);
 	if (!cdata)
 		return -ENOMEM;
-	res = apfs_compressed_data_read(comp_data, cdata, csize, doffs + coffs);
+	res = apfs_compressed_data_read(comp_data, cdata, csize, (u64)doffs + coffs);
 	if (res) {
 		apfs_err(sb, "failed to read compressed block");
 		goto fail;
 	}
 
-	switch (le32_to_cpu(fd->hdr.algo)) {
-	case APFS_COMPRESS_ZLIB_RSRC:
-	case APFS_COMPRESS_ZLIB_ATTR:
-		if (cdata[0] == 0x78 && csize >= 2) {
-			res = zlib_inflate_blob(tmp, bsize, cdata + 2, csize - 2);
-			if (res <= 0) {
-				apfs_err(sb, "zlib decompression failed");
-				goto fail;
-			}
-			bsize = res;
-			res = 0;
-		} else if ((cdata[0] & 0x0F) == 0x0F) {
-			memcpy(tmp, &cdata[1], csize - 1);
-			bsize = csize - 1;
-		} else {
-			apfs_err(sb, "zlib decompression failed");
-			res = -EINVAL;
-			goto fail;
-		}
-		break;
-	case APFS_COMPRESS_LZVN_RSRC:
-	case APFS_COMPRESS_LZVN_ATTR:
-		if (cdata[0] == 0x06) {
-			memcpy(tmp, &cdata[1], csize - 1);
-			bsize = csize - 1;
-		} else {
-			lzvn_decoder_state dstate = {0};
-
-			dstate.src = cdata;
-			dstate.src_end = dstate.src + csize;
-			dstate.dst = dstate.dst_begin = tmp;
-			dstate.dst_end = dstate.dst + bsize;
-			lzvn_decode(&dstate);
-			bsize = dstate.dst - tmp;
-		}
-		break;
-	case APFS_COMPRESS_LZBITMAP_RSRC:
-	case APFS_COMPRESS_LZBITMAP_ATTR:
-		if (cdata[0] == 0x5a) {
-			res = zbm_decompress(tmp, bsize, cdata, csize, &bsize);
-			if (res < 0) {
-				apfs_err(sb, "lzbitmap decompression failed");
-				goto fail;
-			}
-			res = 0;
-		} else if ((cdata[0] & 0x0F) == 0x0F) {
-			memcpy(tmp, &cdata[1], csize - 1);
-			bsize = csize - 1;
-		} else {
-			apfs_err(sb, "lzbitmap decompression failed");
-			res = -EINVAL;
-			goto fail;
-		}
-		break;
-	case APFS_COMPRESS_LZFSE_RSRC:
-	case APFS_COMPRESS_LZFSE_ATTR:
-		if (cdata[0] == 0x62 && csize >= 2) {
-			res = lzfse_decode_buffer(tmp, bsize, cdata, csize, NULL);
-			if (res == 0) {
-				apfs_err(sb, "lzfse decompression failed");
-				/* Could be ENOMEM too... */
-				res = -EINVAL;
-				goto fail;
-			}
-			bsize = res;
-			res = 0;
-		} else {
-			/* cdata[0] == 0xff, apparently */
-			memcpy(tmp, &cdata[1], csize - 1);
-			bsize = csize - 1;
-		}
-		break;
-	case APFS_COMPRESS_PLAIN_RSRC:
-	case APFS_COMPRESS_PLAIN_ATTR:
-		memcpy(tmp, &cdata[1], csize - 1);
-		bsize = csize - 1;
-		break;
-	default:
-		res = -EINVAL;
+	res = apfs_decompress_block(le32_to_cpu(fd->hdr.algo), cdata, csize, tmp, APFS_COMPRESS_BLOCK, bsize, &bsize);
+	if (res) {
+		apfs_err(sb, "block decompression failed");
 		goto fail;
 	}
 	fd->bufblk = block;
