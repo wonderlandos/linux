@@ -5,11 +5,13 @@
  * util clamps below. scx_wolos and EEVDF both read them; nothing else is new.
  * /sys/kernel/wolos/abi_version     (r)  WOLOS_ABI_VERSION
  * /sys/kernel/wolos/foreground_pid  (rw, root) tgid of the frontmost app, 0 = none
+ * /sys/kernel/wolos/shield          (rw, root) 0/1, protect that app's busiest thread
+ * /sys/kernel/wolos/shield_status   (r)  "tid cpu" of the protected thread, "0 -1" = none
  */
 #ifndef _UAPI_LINUX_WOLOS_H
 #define _UAPI_LINUX_WOLOS_H
 
-#define WOLOS_ABI_VERSION		1
+#define WOLOS_ABI_VERSION		2
 
 enum wolos_qos_class {
 	WOLOS_QOS_USER_INTERACTIVE = 0,	/* compositor, shell, input: SCHED_NORMAL nice -10, uclamp 768..1024 */

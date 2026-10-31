@@ -6,6 +6,8 @@
 #ifndef _LINUX_WOLOS_POLICY_H
 #define _LINUX_WOLOS_POLICY_H
 
+#include <linux/array_size.h>
+#include <linux/string.h>
 #include <linux/types.h>
 
 /* Facts the TSC watchdog decision depends on. */
@@ -71,6 +73,70 @@ static inline unsigned long wolos_boost_floor(unsigned long now, unsigned long u
 	if ((long)(until - now) <= 0)
 		return 0;
 	return cap * (pct > 100 ? 100 : pct) / 100;
+}
+
+/*
+ * Shield: index of the thread that should hold the core. @delta[i] is each
+ * thread's runtime over the last period, @cur the holder or -1. Nobody qualifies
+ * under @min_delta. A rival must beat a qualifying holder by @switch_pct percent,
+ * so two threads of similar load do not trade the core every period.
+ */
+static inline int wolos_shield_pick_thread(const u64 *delta, int n, int cur,
+					   unsigned int switch_pct, u64 min_delta)
+{
+	int i, best = -1;
+
+	for (i = 0; i < n; i++)
+		if (delta[i] >= min_delta && (best < 0 || delta[i] > delta[best]))
+			best = i;
+	if (best >= 0 && cur >= 0 && cur < n && delta[cur] >= min_delta &&
+	    delta[best] * 100 < delta[cur] * switch_pct)
+		return cur;
+	return best;
+}
+
+struct wolos_cpu_facts {
+	bool allowed;
+	u32 llc_kb, capacity;
+	int prio;
+};
+
+/* Best core: largest last-level cache (X3D), then capacity, then ITMT priority. */
+static inline int wolos_shield_pick_cpu(const struct wolos_cpu_facts *f, int n)
+{
+	int i, best = -1;
+
+	for (i = 0; i < n; i++) {
+		if (!f[i].allowed)
+			continue;
+		if (best < 0 || f[i].llc_kb > f[best].llc_kb ||
+		    (f[i].llc_kb == f[best].llc_kb &&
+		     (f[i].capacity > f[best].capacity ||
+		      (f[i].capacity == f[best].capacity && f[i].prio > f[best].prio))))
+			best = i;
+	}
+	return best;
+}
+
+/* Shield only with at least 6 online CPUs and 2 left for housekeeping. */
+static inline bool wolos_shield_enough_cpus(unsigned int online, unsigned int shielded)
+{
+	return online >= 6 && online - shielded >= 2;
+}
+
+/* GPU and input IRQs stay where they are, next to the thread that waits for them. */
+static inline bool wolos_shield_irq_keep(const char *name)
+{
+	static const char * const keep[] = { "amdgpu", "i915", "xe", "nvidia", "nouveau",
+					     "xhci", "i8042", "hid" };
+	unsigned int i;
+
+	if (!name)
+		return false;
+	for (i = 0; i < ARRAY_SIZE(keep); i++)
+		if (!strncmp(name, keep[i], strlen(keep[i])))
+			return true;
+	return false;
 }
 
 #endif

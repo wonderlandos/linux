@@ -11,6 +11,7 @@
 #include <linux/wolos.h>
 
 static int wolos_fg_tgid;
+struct kobject *wolos_kobj;
 
 int wolos_foreground_tgid(void)
 {
@@ -53,10 +54,9 @@ static const struct attribute_group wolos_group = { .attrs = wolos_attrs };
 
 static int __init wolos_hints_init(void)
 {
-	struct kobject *kobj = kobject_create_and_add("wolos", kernel_kobj);
-
-	if (!kobj)
+	wolos_kobj = kobject_create_and_add("wolos", kernel_kobj);
+	if (!wolos_kobj)
 		return -ENOMEM;
-	return sysfs_create_group(kobj, &wolos_group);
+	return sysfs_create_group(wolos_kobj, &wolos_group);
 }
 subsys_initcall(wolos_hints_init);

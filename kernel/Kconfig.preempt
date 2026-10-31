@@ -208,6 +208,16 @@ config WOLOS_HINTS
 	  (/sys/kernel/wolos/foreground_pid) so drivers can boost it only.
 	  QoS classes themselves use sched_setattr(2), see <linux/wolos.h>.
 
+config WOLOS_SHIELD
+	bool "WolOS shield (keep the frontmost app's main thread core quiet)"
+	depends on WOLOS_HINTS && SMP && X86_64
+	default y
+	help
+	  Off until /sys/kernel/wolos/shield is set to 1. Then the frontmost
+	  app's busiest thread gets the best core, and other fair tasks,
+	  unbound workqueues and device IRQs (not GPU or input) stay elsewhere.
+	  Does nothing below 6 online CPUs.
+
 config WOLOS_INPUT_BOOST
 	bool "WolOS input boost (CPU floor right after an input event)"
 	depends on WOLOS_HINTS && INPUT=y && CPU_FREQ_GOV_SCHEDUTIL

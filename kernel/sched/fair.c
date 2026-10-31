@@ -40,6 +40,8 @@
 #include <linux/sched/cputime.h>
 #include <linux/sched/isolation.h>
 #include <linux/sched/nohz.h>
+#include <linux/wolos.h>
+#include <linux/wolos_policy.h>
 #include <linux/sched/prio.h>
 #include <linux/static_call.h>
 
@@ -9912,7 +9914,7 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu)
  * Returns the target CPU number.
  */
 static int
-select_task_rq_fair(struct task_struct *p, int prev_cpu, int wake_flags)
+__select_task_rq_fair(struct task_struct *p, int prev_cpu, int wake_flags)
 {
 	int sync = (wake_flags & WF_SYNC) && !(current->flags & PF_EXITING);
 	struct sched_domain *tmp, *sd = NULL;
@@ -9979,6 +9981,18 @@ select_task_rq_fair(struct task_struct *p, int prev_cpu, int wake_flags)
 		return select_idle_sibling(p, prev_cpu, new_cpu);
 
 	return new_cpu;
+}
+
+static int
+select_task_rq_fair(struct task_struct *p, int prev_cpu, int wake_flags)
+{
+	int cpu = __select_task_rq_fair(p, prev_cpu, wake_flags);
+
+#ifdef CONFIG_WOLOS_SHIELD
+	if (static_branch_unlikely(&wolos_shield_on))
+		return wolos_shield_place(p, prev_cpu, cpu);
+#endif
+	return cpu;
 }
 
 /*
@@ -11159,6 +11173,12 @@ int can_migrate_task(struct task_struct *p, struct lb_env *env)
 	/* Disregard percpu kthreads; they are where they need to be. */
 	if (kthread_is_per_cpu(p))
 		return 0;
+
+#ifdef CONFIG_WOLOS_SHIELD
+	if (static_branch_unlikely(&wolos_shield_on) &&
+	    wolos_shield_blocks_pull(p, env->dst_cpu))
+		return 0;
+#endif
 
 	if (task_is_blocked(p))
 		return 0;

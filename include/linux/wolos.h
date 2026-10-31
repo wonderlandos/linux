@@ -11,6 +11,20 @@ int wolos_foreground_tgid(void);
 static inline int wolos_foreground_tgid(void) { return 0; }
 #endif
 
+#ifdef CONFIG_WOLOS_HINTS
+struct kobject;
+extern struct kobject *wolos_kobj;	/* /sys/kernel/wolos */
+#endif
+
+#ifdef CONFIG_WOLOS_SHIELD
+#include <linux/jump_label.h>
+struct task_struct;
+DECLARE_STATIC_KEY_FALSE(wolos_shield_on);
+int wolos_shield_place(struct task_struct *p, int prev_cpu, int new_cpu);
+bool wolos_shield_blocks_pull(struct task_struct *p, int dst_cpu);
+void wolos_shield_move_task(struct task_struct *p, int cpu);
+#endif
+
 #ifdef CONFIG_WOLOS_INPUT_BOOST
 #include <linux/notifier.h>
 /* Utilization floor for a CPU of capacity @cap while an input boost is open. */

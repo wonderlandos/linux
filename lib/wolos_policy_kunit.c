@@ -57,7 +57,57 @@ static void input_boost(struct kunit *t)
 	KUNIT_EXPECT_EQ(t, wolos_boost_floor(ULONG_MAX - 5, 10, 1000, 50), 500UL); /* wrap */
 }
 
+static void shield_thread(struct kunit *t)
+{
+	const u64 d[] = { 10, 100, 120, 130 };
+	const u64 z[] = { 1, 2 };
+
+	KUNIT_EXPECT_EQ(t, wolos_shield_pick_thread(d, 4, -1, 125, 50), 3);
+	/* holder at 100 keeps the core against 120 and 124 ... */
+	KUNIT_EXPECT_EQ(t, wolos_shield_pick_thread(d, 3, 1, 125, 50), 1);
+	/* ... but not against 130 */
+	KUNIT_EXPECT_EQ(t, wolos_shield_pick_thread(d, 4, 1, 125, 50), 3);
+	/* a holder under the floor loses at once */
+	KUNIT_EXPECT_EQ(t, wolos_shield_pick_thread(d, 4, 0, 125, 50), 3);
+	/* nobody qualifies */
+	KUNIT_EXPECT_EQ(t, wolos_shield_pick_thread(z, 2, 0, 125, 50), -1);
+	KUNIT_EXPECT_EQ(t, wolos_shield_pick_thread(z, 0, -1, 125, 50), -1);
+}
+
+static void shield_cpu(struct kunit *t)
+{
+	const struct wolos_cpu_facts x3d[] = {
+		{ false, 96000, 1024, 0 },	/* not allowed: CPU 0 */
+		{ true, 32000, 1024, 200 },	/* faster CCD */
+		{ true, 96000, 1000, 100 },	/* V-cache CCD wins on cache */
+	};
+	const struct wolos_cpu_facts hybrid[] = {
+		{ true, 30000, 700, 300 },	/* E-core */
+		{ true, 30000, 1024, 100 },
+		{ true, 30000, 1024, 200 },	/* favoured P-core */
+	};
+	const struct wolos_cpu_facts none[] = { { false, 1, 1, 1 } };
+
+	KUNIT_EXPECT_EQ(t, wolos_shield_pick_cpu(x3d, 3), 2);
+	KUNIT_EXPECT_EQ(t, wolos_shield_pick_cpu(hybrid, 3), 2);
+	KUNIT_EXPECT_EQ(t, wolos_shield_pick_cpu(none, 1), -1);
+}
+
+static void shield_limits(struct kunit *t)
+{
+	KUNIT_EXPECT_FALSE(t, wolos_shield_enough_cpus(4, 2));
+	KUNIT_EXPECT_TRUE(t, wolos_shield_enough_cpus(6, 2));
+	KUNIT_EXPECT_FALSE(t, wolos_shield_enough_cpus(6, 5));
+	KUNIT_EXPECT_TRUE(t, wolos_shield_irq_keep("amdgpu"));
+	KUNIT_EXPECT_TRUE(t, wolos_shield_irq_keep("xhci_hcd"));
+	KUNIT_EXPECT_FALSE(t, wolos_shield_irq_keep("eth0-TxRx-0"));
+	KUNIT_EXPECT_FALSE(t, wolos_shield_irq_keep(NULL));
+}
+
 static struct kunit_case wolos_policy_cases[] = {
+	KUNIT_CASE(shield_thread),
+	KUNIT_CASE(shield_cpu),
+	KUNIT_CASE(shield_limits),
 	KUNIT_CASE(input_boost),
 	KUNIT_CASE(tsc_trust),
 	KUNIT_CASE(kbd_bypass),

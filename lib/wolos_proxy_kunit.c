@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Priority inversion through a struct mutex: a SCHED_IDLE holder, a nice 0 hog
  * on its CPU and a nice -10 waiter. Without proxy execution the holder gets

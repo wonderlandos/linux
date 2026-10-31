@@ -40,3 +40,4 @@ obj-y += core.o
 obj-y += fair.o
 obj-y += build_policy.o
 obj-y += build_utility.o
+obj-$(CONFIG_WOLOS_SHIELD) += wolos_shield.o

@@ -87,6 +87,8 @@
 #include <trace/events/ipi.h>
 #undef CREATE_TRACE_POINTS
 
+#include <linux/wolos.h>
+
 #include "sched.h"
 #include "stats.h"
 
@@ -5690,6 +5692,16 @@ unsigned int nr_iowait(void)
  * sched_exec - execve() is a valuable balancing opportunity, because at
  * this point the task has the smallest effective memory and cache footprint.
  */
+#ifdef CONFIG_WOLOS_SHIELD
+/* From process context: the caller holds a reference on @p. */
+void wolos_shield_move_task(struct task_struct *p, int cpu)
+{
+	struct migration_arg arg = { p, cpu };
+
+	stop_one_cpu(task_cpu(p), migration_cpu_stop, &arg);
+}
+#endif
+
 void sched_exec(void)
 {
 	struct task_struct *p = current;
