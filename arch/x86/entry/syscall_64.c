@@ -67,11 +67,14 @@ static __always_inline bool do_syscall_x64(struct pt_regs *regs, unsigned long n
 static __always_inline void do_syscall_x32(struct pt_regs *regs, unsigned long nr)
 {
 	/* Adjust the starting offset of the table */
-	nr -= __X32_SYSCALL_BIT;
+	unsigned long xnr = nr - __X32_SYSCALL_BIT;
 
-	if (IS_ENABLED(CONFIG_X86_X32_ABI) && likely(nr < X32_NR_syscalls)) {
-		nr = array_index_nospec(nr, X32_NR_syscalls);
-		regs->ax = x32_sys_call(regs, (unsigned int)nr);
+	if (IS_ENABLED(CONFIG_X86_X32_ABI) && likely(xnr < X32_NR_syscalls)) {
+		xnr = array_index_nospec(xnr, X32_NR_syscalls);
+		regs->ax = x32_sys_call(regs, (unsigned int)xnr);
+	} else if ((int)nr != -1) {
+		/* A tracer may have written ax at syscall entry. */
+		regs->ax = -ENOSYS;
 	}
 }
 
