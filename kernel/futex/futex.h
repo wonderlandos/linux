@@ -510,6 +510,65 @@ static inline bool futex_value_differs(u32 __user *uaddr, u32 val)
 	return !futex_get_value_locked(&cur, uaddr) && cur != val;
 }
 
+/*
+ * WolKernel: futex_waitv()'s non-blocking answer in one pass over the user's
+ * array and timeout, inside one user access window: no key, no hash, no lock,
+ * no copy. Only when every entry is plain (u32, private or shared, aligned, no
+ * reserved bits) and the timeout is valid does the scan have a verdict, and
+ * any word that differs means the kernel can only say -EWOULDBLOCK. Everything
+ * else, a fault included, is FUTEX_SCAN_FULL and the full path decides, so no
+ * error can change: the scan reads every word because an unreadable one at any
+ * index may have to win over the mismatch. A word that differs is a valid
+ * linearization; a word that matches is read again under the bucket lock
+ * before any sleep. May fault in user pages: only for syscall context.
+ */
+enum { FUTEX_SCAN_FULL, FUTEX_SCAN_MATCH, FUTEX_SCAN_DIFFERS };
+
+#ifndef masked_user_access_begin
+#define mask_user_address(p) (access_ok(p, sizeof(*(p))) ? (p) : NULL)
+#endif
+
+static __always_inline int futex_waitv_scan(const struct futex_waitv __user *uw,
+					    unsigned int nr,
+					    const struct __kernel_timespec __user *to)
+{
+	u32 odd = 0, diff = 0;
+	unsigned int i;
+
+	scoped_user_read_access_size(uw, nr * sizeof(*uw), full) {
+		if (to) {
+			const struct __kernel_timespec __user *t = mask_user_address(to);
+			s64 sec, nsec;
+
+			unsafe_get_user(sec, &t->tv_sec, full);
+			unsafe_get_user(nsec, &t->tv_nsec, full);
+			if (in_compat_syscall())
+				nsec = (u32)nsec;
+			odd = (sec < 0) | ((u64)nsec >= NSEC_PER_SEC);
+		}
+		for (i = 0; i < nr; i++) {
+			u64 val, uaddr;
+			u32 fl, rsv, cur;
+			u32 __user *word;
+
+			unsafe_get_user(val, &uw[i].val, full);
+			unsafe_get_user(uaddr, &uw[i].uaddr, full);
+			unsafe_get_user(fl, &uw[i].flags, full);
+			unsafe_get_user(rsv, &uw[i].__reserved, full);
+			odd |= ((fl & ~FUTEX2_PRIVATE) ^ FUTEX2_SIZE_U32) | rsv |
+			       (u32)(val >> 32) | ((u32)uaddr & 3);
+			word = mask_user_address(u64_to_user_ptr(uaddr));
+			unsafe_get_user(cur, word, full);
+			diff |= cur ^ (u32)val;
+		}
+	}
+	if (odd)
+		return FUTEX_SCAN_FULL;
+	return diff ? FUTEX_SCAN_DIFFERS : FUTEX_SCAN_MATCH;
+full:
+	return FUTEX_SCAN_FULL;
+}
+
 extern int futex_parse_waitv(struct futex_vector *futexv,
 			     struct futex_waitv __user *uwaitv,
 			     unsigned int nr_futexes, futex_wake_fn *wake,

@@ -47,6 +47,9 @@ echo
 ./futex_waitv
 
 echo
+./futex_waitv_semantics
+
+echo
 ./futex_priv_hash
 
 echo
