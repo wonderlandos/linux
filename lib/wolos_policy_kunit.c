@@ -104,7 +104,27 @@ static void shield_limits(struct kunit *t)
 	KUNIT_EXPECT_FALSE(t, wolos_shield_irq_keep(NULL));
 }
 
+static void sock_busy(struct kunit *t)
+{
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(0, 50, true, true, true, true), 50U);
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(0, 0, true, true, true, true), 0U);	/* off */
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(0, 50, true, true, true, false), 0U);	/* not frontmost */
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(0, 50, true, false, true, true), 0U);	/* TCP */
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(0, 50, true, true, false, true), 0U);	/* unix */
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(0, 50, false, true, true, true), 0U);	/* softirq */
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(100, 50, true, true, true, true), 100U);	/* sysctl wins */
+}
+
+static void xhci_imod(struct kunit *t)
+{
+	KUNIT_EXPECT_EQ(t, wolos_xhci_imod_ns(-1, 40000), 40000U);
+	KUNIT_EXPECT_EQ(t, wolos_xhci_imod_ns(0, 40000), 0U);
+	KUNIT_EXPECT_EQ(t, wolos_xhci_imod_ns(10000, 40000), 10000U);
+}
+
 static struct kunit_case wolos_policy_cases[] = {
+	KUNIT_CASE(sock_busy),
+	KUNIT_CASE(xhci_imod),
 	KUNIT_CASE(shield_thread),
 	KUNIT_CASE(shield_cpu),
 	KUNIT_CASE(shield_limits),

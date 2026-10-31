@@ -139,4 +139,22 @@ static inline bool wolos_shield_irq_keep(const char *name)
 	return false;
 }
 
+/*
+ * sk_ll_usec of a new socket: the system value, unless the frontmost app creates
+ * a UDP socket from process context and the WolOS value is higher.
+ */
+static inline unsigned int wolos_sock_busy_us(unsigned int sys_us, unsigned int fg_us,
+					      bool task_ctx, bool dgram, bool inet, bool fg)
+{
+	if (task_ctx && dgram && inet && fg && fg_us > sys_us)
+		return fg_us;
+	return sys_us;
+}
+
+/* xHCI interrupt moderation: the module parameter when set, else the driver default. */
+static inline u32 wolos_xhci_imod_ns(int param_ns, u32 dflt_ns)
+{
+	return param_ns < 0 ? dflt_ns : (u32)param_ns;
+}
+
 #endif

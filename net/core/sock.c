@@ -86,6 +86,8 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/unaligned.h>
+#include <linux/wolos.h>
+#include <linux/wolos_policy.h>
 #include <linux/capability.h>
 #include <linux/errno.h>
 #include <linux/errqueue.h>
@@ -3821,6 +3823,16 @@ void sk_stop_timer_sync(struct sock *sk, struct timer_list *timer)
 }
 EXPORT_SYMBOL(sk_stop_timer_sync);
 
+/*
+ * wolos_net.fg_busy_us: UDP sockets the frontmost app creates spin this long
+ * in recv before sleeping (a per-socket net.core.busy_read). 0 = off.
+ */
+static unsigned int wolos_fg_busy_us;
+#undef MODULE_PARAM_PREFIX
+#define MODULE_PARAM_PREFIX "wolos_net."
+module_param_named(fg_busy_us, wolos_fg_busy_us, uint, 0644);
+#undef MODULE_PARAM_PREFIX
+
 void sock_init_data_uid(struct socket *sock, struct sock *sk, kuid_t uid)
 {
 	sk_init_common(sk);
@@ -3873,7 +3885,12 @@ void sock_init_data_uid(struct socket *sock, struct sock *sk, kuid_t uid)
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
 	sk->sk_napi_id		=	0;
-	sk->sk_ll_usec		=	READ_ONCE(sysctl_net_busy_read);
+	sk->sk_ll_usec		=	wolos_sock_busy_us(READ_ONCE(sysctl_net_busy_read),
+							   READ_ONCE(wolos_fg_busy_us), in_task(),
+							   sk->sk_type == SOCK_DGRAM,
+							   sk->sk_family == AF_INET ||
+							   sk->sk_family == AF_INET6,
+							   wolos_foreground_tgid() == current->tgid);
 #endif
 
 	sk->sk_max_pacing_rate = ~0UL;

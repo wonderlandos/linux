@@ -10,6 +10,7 @@
 
 #include <linux/pci.h>
 #include <linux/slab.h>
+#include <linux/wolos_policy.h>
 #include <linux/module.h>
 #include <linux/acpi.h>
 #include <linux/reset.h>
@@ -568,6 +569,10 @@ static void xhci_pme_acpi_rtd3_enable(struct pci_dev *dev) { }
 static void xhci_find_lpm_incapable_ports(struct usb_hcd *hcd, struct usb_device *hdev) { }
 #endif /* CONFIG_ACPI */
 
+static int imod_ns = -1;
+module_param(imod_ns, int, 0444);
+MODULE_PARM_DESC(imod_ns, "Interrupt moderation in ns, read at probe (-1 = driver default, 40000)");
+
 /* called during probe() after chip reset completes */
 static int xhci_pci_setup(struct usb_hcd *hcd)
 {
@@ -579,7 +584,7 @@ static int xhci_pci_setup(struct usb_hcd *hcd)
 	xhci = hcd_to_xhci(hcd);
 
 	/* imod_interval is the interrupt moderation value in nanoseconds. */
-	xhci->imod_interval = 40000;
+	xhci->imod_interval = wolos_xhci_imod_ns(imod_ns, 40000);
 
 	retval = xhci_gen_setup(hcd, xhci_pci_quirks);
 	if (retval)
