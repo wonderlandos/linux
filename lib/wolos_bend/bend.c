@@ -309,6 +309,9 @@ struct bend_run {
 
 static struct workqueue_struct *bend_wq;
 
+/* Callers may be in reclaim; without memory the job just runs serially. */
+#define BEND_RUN_GFP	(GFP_NOWAIT | __GFP_NOWARN)
+
 static void bend_account(struct bend_run *r, unsigned long n)
 {
 	if (atomic_long_sub_return(n, &r->remaining) == 0)
@@ -426,7 +429,7 @@ int bend_fork_join(const struct bend_job *job)
 		want = min_t(int, want, job->max_workers);
 	if (!bend_enabled() || !bend_wq || want < 2)
 		goto serial;
-	r = kzalloc(sizeof(*r), GFP_KERNEL | __GFP_NOWARN);
+	r = kzalloc(sizeof(*r), BEND_RUN_GFP);
 	if (!r)
 		goto serial;
 
@@ -436,12 +439,12 @@ int bend_fork_join(const struct bend_job *job)
 	atomic_long_set(&r->remaining, units);
 	init_completion(&r->done);
 	for (i = 0; i <= n; i++) {
-		struct bend_worker *w = kmalloc(sizeof(*w), GFP_KERNEL | __GFP_NOWARN);
+		struct bend_worker *w = kmalloc(sizeof(*w), BEND_RUN_GFP);
 
 		if (!w)
 			break;
 		bend_deque_init(&w->dq);
-		bend_arena_init(&w->arena, GFP_KERNEL | __GFP_NOWARN);
+		bend_arena_init(&w->arena, BEND_RUN_GFP);
 		INIT_WORK(&w->work, bend_helper);
 		w->run = r;
 		w->cpu = i ? cpus[i - 1] : this;
@@ -480,7 +483,7 @@ EXPORT_SYMBOL_GPL(bend_fork_join);
 
 static int __init bend_init(void)
 {
-	bend_wq = alloc_workqueue("wolos_bend", WQ_PERCPU, 0);
+	bend_wq = alloc_workqueue("wolos_bend", WQ_PERCPU | WQ_MEM_RECLAIM, 0);
 	return bend_wq ? 0 : -ENOMEM;
 }
 core_initcall(bend_init);
