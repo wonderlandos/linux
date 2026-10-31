@@ -89,6 +89,7 @@
 #include "pgalloc-track.h"
 #include "internal.h"
 #include "swap.h"
+#include <linux/wolos_bend.h>
 
 #if defined(LAST_CPUPID_NOT_IN_PAGE_FLAGS) && !defined(CONFIG_COMPILE_TEST)
 #warning Unfortunate NUMA and NUMA Balancing config, growing page-frame for last_cpupid.
@@ -7498,6 +7499,10 @@ static void clear_contig_highpages(struct page *page, unsigned long addr,
 				   nr_pages : PROCESS_PAGES_NON_PREEMPT_BATCH;
 
 	might_sleep();
+
+	/* Large folios: the pieces run on idle CPUs too. */
+	if (bend_clear_user_highpages(page, addr, nr_pages))
+		return;
 
 	for (i = 0; i < nr_pages; i += count) {
 		cond_resched();

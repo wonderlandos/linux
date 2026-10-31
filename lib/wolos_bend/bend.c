@@ -20,7 +20,21 @@
 #define MODULE_PARAM_PREFIX "wolos_bend."
 
 static bool enable = true;
-module_param(enable, bool, 0644);
+
+static int enable_set(const char *val, const struct kernel_param *kp)
+{
+	int ret = param_set_bool(val, kp);
+
+	if (!ret)
+		bend_clear_update();
+	return ret;
+}
+
+static const struct kernel_param_ops enable_ops = {
+	.set = enable_set,
+	.get = param_get_bool,
+};
+module_param_cb(enable, &enable_ops, &enable, 0644);
 MODULE_PARM_DESC(enable, "Run fork/join pieces on idle CPUs (0: serial)");
 
 bool bend_enabled(void)
@@ -31,7 +45,10 @@ EXPORT_SYMBOL_GPL(bend_enabled);
 
 bool bend_set_enabled(bool on)
 {
-	return xchg(&enable, on);
+	bool was = xchg(&enable, on);
+
+	bend_clear_update();
+	return was;
 }
 EXPORT_SYMBOL_GPL(bend_set_enabled);
 
