@@ -2,8 +2,9 @@
 /*
  * UDP round trip, a game's network tick.
  *   udp_pingpong -s PORT                       echo server
- *   udp_pingpong -c HOST -P PORT -n COUNT [-f] [-g GAP_US]
+ *   udp_pingpong -c HOST -P PORT -n COUNT [-f] [-g GAP_US] [-b BUSY_US]
  * -f writes our pid to /sys/kernel/wolos/foreground_pid before the socket exists.
+ * -b opts in with SO_BUSY_POLL.
  * Prints "rtt_p50 rtt_p99 rtt_p999 rtt_max" in microseconds.
  */
 #define _GNU_SOURCE
@@ -43,13 +44,14 @@ static void set_fg(int pid)
 
 int main(int argc, char **argv)
 {
+	int busy_us = 0;
 	struct sockaddr_in a = { .sin_family = AF_INET };
 	const char *host = NULL;
 	int port = 7777, n = 20000, fg = 0, gap_us = 200, srv = 0, o, s, i;
 	uint64_t *v;
 	char buf[64] = { 0 };
 
-	while ((o = getopt(argc, argv, "s:c:P:n:fg:")) != -1) {
+	while ((o = getopt(argc, argv, "s:c:P:n:fg:b:")) != -1) {
 		switch (o) {
 		case 's': srv = 1; port = atoi(optarg); break;
 		case 'c': host = optarg; break;
@@ -57,6 +59,7 @@ int main(int argc, char **argv)
 		case 'n': n = atoi(optarg); break;
 		case 'f': fg = 1; break;
 		case 'g': gap_us = atoi(optarg); break;
+		case 'b': busy_us = atoi(optarg); break;
 		default: return 2;
 		}
 	}
@@ -81,6 +84,8 @@ int main(int argc, char **argv)
 		}
 	}
 	inet_pton(AF_INET, host, &a.sin_addr);
+	if (busy_us && setsockopt(s, SOL_SOCKET, SO_BUSY_POLL, &busy_us, sizeof(busy_us)))
+		return 1;
 	if (connect(s, (struct sockaddr *)&a, sizeof(a)))
 		return 1;
 	v = calloc(n, sizeof(*v));

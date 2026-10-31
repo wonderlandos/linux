@@ -1195,6 +1195,17 @@ static int sockopt_validate_clockid(__kernel_clockid_t value)
  *	at the socket level. Everything here is generic.
  */
 
+/*
+ * wolos_net.fg_busy_us: a UDP socket of the frontmost app that opts in with
+ * SO_BUSY_POLL spins this long in recv. Shorter spins measured worse. 0 = off.
+ */
+static unsigned int wolos_fg_busy_us = IS_ENABLED(CONFIG_WOLOS_HINTS) ? 2000 : 0;
+#undef MODULE_PARAM_PREFIX
+#define MODULE_PARAM_PREFIX "wolos_net."
+module_param_named(fg_busy_us, wolos_fg_busy_us, uint, 0644);
+#undef MODULE_PARAM_PREFIX
+#define MODULE_PARAM_PREFIX
+
 int sk_setsockopt(struct sock *sk, int level, int optname,
 		  sockptr_t optval, unsigned int optlen)
 {
@@ -1238,7 +1249,12 @@ int sk_setsockopt(struct sock *sk, int level, int optname,
 	case SO_BUSY_POLL:
 		if (val < 0)
 			return -EINVAL;
-		WRITE_ONCE(sk->sk_ll_usec, val);
+		WRITE_ONCE(sk->sk_ll_usec,
+			   wolos_sock_busy_us(val, READ_ONCE(wolos_fg_busy_us),
+					      sk->sk_type == SOCK_DGRAM,
+					      sk->sk_family == AF_INET ||
+					      sk->sk_family == AF_INET6,
+					      wolos_foreground_tgid() == current->tgid));
 		return 0;
 	case SO_PREFER_BUSY_POLL:
 		if (valbool && !sockopt_capable(CAP_NET_ADMIN))
@@ -3823,15 +3839,6 @@ void sk_stop_timer_sync(struct sock *sk, struct timer_list *timer)
 }
 EXPORT_SYMBOL(sk_stop_timer_sync);
 
-/*
- * wolos_net.fg_busy_us: UDP sockets the frontmost app creates spin this long
- * in recv before sleeping (a per-socket net.core.busy_read). 0 = off.
- */
-static unsigned int wolos_fg_busy_us;
-#undef MODULE_PARAM_PREFIX
-#define MODULE_PARAM_PREFIX "wolos_net."
-module_param_named(fg_busy_us, wolos_fg_busy_us, uint, 0644);
-#undef MODULE_PARAM_PREFIX
 
 void sock_init_data_uid(struct socket *sock, struct sock *sk, kuid_t uid)
 {
@@ -3885,12 +3892,7 @@ void sock_init_data_uid(struct socket *sock, struct sock *sk, kuid_t uid)
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
 	sk->sk_napi_id		=	0;
-	sk->sk_ll_usec		=	wolos_sock_busy_us(READ_ONCE(sysctl_net_busy_read),
-							   READ_ONCE(wolos_fg_busy_us), in_task(),
-							   sk->sk_type == SOCK_DGRAM,
-							   sk->sk_family == AF_INET ||
-							   sk->sk_family == AF_INET6,
-							   wolos_foreground_tgid() == current->tgid);
+	sk->sk_ll_usec		=	READ_ONCE(sysctl_net_busy_read);
 #endif
 
 	sk->sk_max_pacing_rate = ~0UL;

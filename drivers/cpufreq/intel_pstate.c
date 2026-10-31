@@ -301,7 +301,8 @@ static struct pstate_funcs pstate_funcs __read_mostly;
 static bool hwp_active __ro_after_init;
 static bool per_cpu_limits __ro_after_init;
 static bool hwp_forced __ro_after_init;
-static bool hwp_boost __read_mostly;
+/* HWP IO boost, on for WolOS: hwp_dynamic_boost in sysfs turns it off. */
+static bool hwp_boost __read_mostly = IS_ENABLED(CONFIG_WOLOS_HINTS);
 static bool hwp_is_hybrid;
 static u32 hwp_desired_mask __read_mostly = ~0U;
 

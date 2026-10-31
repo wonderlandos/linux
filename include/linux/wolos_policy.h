@@ -143,12 +143,12 @@ static inline bool wolos_shield_irq_keep(const char *name)
  * sk_ll_usec of a new socket: the system value, unless the frontmost app creates
  * a UDP socket from process context and the WolOS value is higher.
  */
-static inline unsigned int wolos_sock_busy_us(unsigned int sys_us, unsigned int fg_us,
-					      bool task_ctx, bool dgram, bool inet, bool fg)
+static inline unsigned int wolos_sock_busy_us(unsigned int want_us, unsigned int fg_us,
+					      bool dgram, bool inet, bool fg)
 {
-	if (task_ctx && dgram && inet && fg && fg_us > sys_us)
+	if (want_us && dgram && inet && fg && fg_us > want_us)
 		return fg_us;
-	return sys_us;
+	return want_us;
 }
 
 /*

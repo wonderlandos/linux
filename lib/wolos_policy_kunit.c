@@ -106,13 +106,15 @@ static void shield_limits(struct kunit *t)
 
 static void sock_busy(struct kunit *t)
 {
-	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(0, 50, true, true, true, true), 50U);
-	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(0, 0, true, true, true, true), 0U);	/* off */
-	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(0, 50, true, true, true, false), 0U);	/* not frontmost */
-	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(0, 50, true, false, true, true), 0U);	/* TCP */
-	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(0, 50, true, true, false, true), 0U);	/* unix */
-	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(0, 50, false, true, true, true), 0U);	/* softirq */
-	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(100, 50, true, true, true, true), 100U);	/* sysctl wins */
+	/* An opted-in UDP socket of the frontmost app gets the budget. */
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(50, 2000, true, true, true), 2000U);
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(3000, 2000, true, true, true), 3000U);
+	/* No opt-in, off switch, other sockets, other apps: what was asked. */
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(0, 2000, true, true, true), 0U);
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(50, 0, true, true, true), 50U);
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(50, 2000, false, true, true), 50U);
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(50, 2000, true, false, true), 50U);
+	KUNIT_EXPECT_EQ(t, wolos_sock_busy_us(50, 2000, true, true, false), 50U);
 }
 
 static void xhci_imod(struct kunit *t)
