@@ -353,12 +353,17 @@ static __always_inline int fse_in_checked_flush64(fse_in_stream64 *s, const uint
 	fse_bit_count nbits = (63 - s->accum_nbits) & -8;
 	/* Convert bits to bytes and decrement buffer address, then load new data. */
 	const uint8_t *buf = (*pbuf) - (nbits >> 3);
-	uint64_t incoming;
+	uint64_t incoming = 0;
 
 	if (buf < buf_start)
 		return -1; /* out of range */
 	*pbuf = buf;
-	memcpy(&incoming, buf, 8);
+	/*
+	 * Load only the nbits/8 bytes that are consumed: the stream may end
+	 * exactly at the end of the caller's buffer, so reading a whole word
+	 * would run past it.
+	 */
+	memcpy(&incoming, buf, nbits >> 3);
 	/* Update the state object and verify its validity (in DEBUG). */
 	s->accum = (s->accum << nbits) | fse_mask_lsb64(incoming, nbits);
 	s->accum_nbits += nbits;
@@ -378,14 +383,14 @@ static __always_inline int fse_in_checked_flush32(fse_in_stream32 *s, const uint
 	if (nbits > 0) {
 		/* Convert bits to bytes and decrement buffer address, then load new data. */
 		const uint8_t *buf = (*pbuf) - (nbits >> 3);
-		uint32_t incoming;
+		uint32_t incoming = 0;
 
 		if (buf < buf_start)
 			return -1; /* out of range */
 
 		*pbuf = buf;
 
-		incoming = *((uint32_t *)buf);
+		memcpy(&incoming, buf, nbits >> 3);
 
 		/* Update the state object and verify its validity (in DEBUG). */
 		s->accum = (s->accum << nbits) | fse_mask_lsb32(incoming, nbits);

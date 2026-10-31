@@ -1773,7 +1773,7 @@ static int apfs_clean_any_orphan(struct super_block *sb)
 		 * This happens rarely for files with no extents, if we hit a
 		 * race with ->evict_inode(). Not a problem: the file is gone.
 		 */
-		apfs_notice(sb, "orphan 0x%llx not found", ino);
+		apfs_debug(sb, "orphan 0x%llx not found", ino);
 		return 0;
 	}
 
