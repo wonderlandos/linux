@@ -731,6 +731,24 @@ static inline u64 calc_reclaim_items_nr(const struct btrfs_fs_info *fs_info,
 /*
  * shrink metadata reservation for delalloc
  */
+/*
+ * Metadata cannot grow because data block groups hold all the disk, but those
+ * groups have room. Waiting for the cleaner loses to a fast writer, so start
+ * reclaim now. This must only queue the work: relocation reserves metadata, and
+ * running it in the metadata reclaim worker would wait on itself.
+ */
+static void kick_data_reclaim(struct btrfs_fs_info *fs_info)
+{
+	struct btrfs_space_info *data = btrfs_find_space_info(fs_info, BTRFS_BLOCK_GROUP_DATA);
+
+	if (!data || !READ_ONCE(data->dynamic_reclaim) || !READ_ONCE(data->periodic_reclaim))
+		return;
+	spin_lock(&data->lock);
+	btrfs_set_periodic_reclaim_ready(data, true);
+	spin_unlock(&data->lock);
+	btrfs_reclaim_bgs(fs_info);
+}
+
 static void shrink_delalloc(struct btrfs_space_info *space_info,
 			    u64 to_reclaim, bool wait_ordered,
 			    bool for_preempt)
@@ -1222,6 +1240,8 @@ static void do_async_reclaim_metadata_space(struct btrfs_space_info *space_info)
 
 	flush_state = FLUSH_DELAYED_ITEMS_NR;
 	do {
+		if (flush_state == COMMIT_TRANS)
+			kick_data_reclaim(fs_info);
 		flush_space(space_info, to_reclaim, flush_state, false);
 		spin_lock(&space_info->lock);
 		if (list_empty(&space_info->tickets)) {
