@@ -26,6 +26,7 @@ TEST_GEN_PROGS := \
 	futex_priv_hash \
 	futex_numa_mpol \
 	futex_waitv \
+	futex_waitv_semantics \
 	futex_numa \
 	robust_list \
 	futex_lock_pi_exiting
