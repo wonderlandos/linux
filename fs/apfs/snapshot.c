@@ -685,3 +685,94 @@ fail:
 	apfs_node_free(snap_root);
 	return err;
 }
+
+/**
+ * apfs_ioc_list_snapshots - Ioctl handler for APFS_IOC_LIST_SNAPSHOTS
+ * @file:	the mount point
+ * @user_arg:	ioctl argument
+ *
+ * Lists the snapshots of the volume in name order. Returns 0 on success, or a
+ * negative error code in case of failure.
+ */
+int apfs_ioc_list_snapshots(struct file *file, void __user *user_arg)
+{
+	struct inode *inode = file_inode(file);
+	struct super_block *sb = inode->i_sb;
+	struct apfs_nxsb_info *nxi = APFS_NXI(sb);
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_ioctl_snap_list *list = NULL;
+	struct apfs_node *snap_root = NULL;
+	struct apfs_query *query = NULL;
+	u64 oid;
+	int err;
+
+	if (apfs_ino(inode) != APFS_ROOT_DIR_INO_NUM)
+		return -ENOTTY;
+
+	list = kzalloc(sizeof(*list), GFP_KERNEL);
+	if (!list)
+		return -ENOMEM;
+
+	down_read(&nxi->nx_big_sem);
+	oid = le64_to_cpu(sbi->s_vsb_raw->apfs_snap_meta_tree_oid);
+	if (!oid)
+		goto copy;
+
+	snap_root = apfs_read_node(sb, oid, APFS_OBJ_PHYSICAL, false /* write */);
+	if (IS_ERR(snap_root)) {
+		err = PTR_ERR(snap_root);
+		snap_root = NULL;
+		goto out;
+	}
+	query = apfs_alloc_query(snap_root, NULL /* parent */);
+	if (!query) {
+		err = -ENOMEM;
+		goto out;
+	}
+	/* All the name records, whatever the name */
+	apfs_init_snap_name_key(NULL, &query->key);
+	query->flags |= APFS_QUERY_SNAP_META | APFS_QUERY_MULTIPLE | APFS_QUERY_EXACT;
+
+	while (1) {
+		char *raw;
+		struct apfs_snap_name_key *key;
+		unsigned int nlen;
+		u64 xid;
+
+		err = apfs_btree_query(sb, &query);
+		if (err == -ENODATA)
+			break;
+		if (err)
+			goto out;
+
+		raw = query->node->object.data;
+		key = (struct apfs_snap_name_key *)(raw + query->key_off);
+		nlen = query->key_len < sizeof(*key) ? 0 : le16_to_cpu(key->name_len);
+		if (!nlen || nlen > APFS_SNAP_MAX_NAMELEN + 1 || sizeof(*key) + nlen > query->key_len) {
+			apfs_err(sb, "bad snapshot name record");
+			err = -EFSCORRUPTED;
+			goto out;
+		}
+		err = apfs_snap_xid_from_query(query, &xid);
+		if (err)
+			goto out;
+
+		if (list->total < APFS_SNAP_LIST_MAX) {
+			list->snap[list->total].xid = xid;
+			memcpy(list->snap[list->total].name, key->name, nlen - 1);
+			list->count++;
+		}
+		list->total++;
+	}
+copy:
+	err = 0;
+out:
+	apfs_free_query(query);
+	if (snap_root)
+		apfs_node_free(snap_root);
+	up_read(&nxi->nx_big_sem);
+	if (!err && copy_to_user(user_arg, list, sizeof(*list)))
+		err = -EFAULT;
+	kfree(list);
+	return err;
+}

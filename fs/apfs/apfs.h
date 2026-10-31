@@ -87,6 +87,18 @@ struct apfs_ioctl_snap_name {
 #define APFS_IOC_GET_PFK	_IOR('@', 0x84, struct apfs_wrapped_crypto_state)
 #define APFS_IOC_TAKE_SNAPSHOT	_IOW('@', 0x85, struct apfs_ioctl_snap_name)
 
+/* Snapshot listing: ask on the mount point, get up to APFS_SNAP_LIST_MAX names with their xids */
+#define APFS_SNAP_LIST_MAX	32
+struct apfs_ioctl_snap_list {
+	__u32 count;		/* on return, number of entries filled in */
+	__u32 total;		/* on return, number of snapshots on the volume */
+	struct {
+		__u64 xid;
+		char name[APFS_SNAP_MAX_NAMELEN + 1];
+	} snap[APFS_SNAP_LIST_MAX];
+};
+#define APFS_IOC_LIST_SNAPSHOTS	_IOR('@', 0x86, struct apfs_ioctl_snap_list)
+
 /*
  * In-memory representation of an APFS object
  */
@@ -1158,6 +1170,7 @@ extern u32 apfs_index_in_data_area(struct super_block *sb, u64 bno);
 extern u64 apfs_data_index_to_bno(struct super_block *sb, u32 index);
 
 /* snapshot.c */
+extern int apfs_ioc_list_snapshots(struct file *file, void __user *user_arg);
 extern int apfs_ioc_take_snapshot(struct file *file, void __user *user_arg);
 extern int apfs_switch_to_snapshot(struct super_block *sb);
 
