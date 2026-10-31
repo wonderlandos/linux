@@ -2850,6 +2850,11 @@ config KFIFO_KUNIT_TEST
 
 	  If unsure, say N.
 
+config WOLOS_PROXY_KUNIT_TEST
+	tristate "KUnit test for priority inversion through a mutex" if !KUNIT_ALL_TESTS
+	depends on KUNIT && SMP
+	default KUNIT_ALL_TESTS
+
 config WOLOS_POLICY_KUNIT_TEST
 	tristate "KUnit test for WolKernel policy decisions" if !KUNIT_ALL_TESTS
 	depends on KUNIT

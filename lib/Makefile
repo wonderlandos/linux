@@ -352,3 +352,4 @@ obj-$(CONFIG_CONTEXT_ANALYSIS_TEST) += test_context-analysis.o
 
 subdir-$(CONFIG_FORTIFY_SOURCE) += test_fortify
 obj-$(CONFIG_WOLOS_POLICY_KUNIT_TEST) += wolos_policy_kunit.o
+obj-$(CONFIG_WOLOS_PROXY_KUNIT_TEST) += wolos_proxy_kunit.o
