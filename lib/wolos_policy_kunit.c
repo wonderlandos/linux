@@ -57,7 +57,16 @@ static void input_boost(struct kunit *t)
 	KUNIT_EXPECT_EQ(t, wolos_boost_floor(ULONG_MAX - 5, 10, 1000, 50), 500UL); /* wrap */
 }
 
+static void nohz_store(struct kunit *t)
+{
+	KUNIT_EXPECT_FALSE(t, wolos_nohz_needs_store(true, 1));	/* already set: stay clean */
+	KUNIT_EXPECT_TRUE(t, wolos_nohz_needs_store(true, 0));
+	KUNIT_EXPECT_TRUE(t, wolos_nohz_needs_store(false, 1));	/* switched off: stock store */
+	KUNIT_EXPECT_TRUE(t, wolos_nohz_needs_store(false, 0));
+}
+
 static struct kunit_case wolos_policy_cases[] = {
+	KUNIT_CASE(nohz_store),
 	KUNIT_CASE(input_boost),
 	KUNIT_CASE(tsc_trust),
 	KUNIT_CASE(kbd_bypass),

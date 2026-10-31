@@ -40,6 +40,7 @@
 #include <linux/sched/cputime.h>
 #include <linux/sched/isolation.h>
 #include <linux/sched/nohz.h>
+#include <linux/wolos_policy.h>
 #include <linux/sched/prio.h>
 #include <linux/static_call.h>
 
@@ -8402,6 +8403,30 @@ static struct {
 	unsigned long next_blocked;	/* Next update of blocked load in jiffies */
 } nohz ____cacheline_aligned;
 
+/* wolos_sched.nohz_cheap_store=0: store the flags on every idle entry, as before. */
+static bool wolos_nohz_cheap_store __read_mostly = true;
+#undef MODULE_PARAM_PREFIX
+#define MODULE_PARAM_PREFIX "wolos_sched."
+module_param_named(nohz_cheap_store, wolos_nohz_cheap_store, bool, 0644);
+#undef MODULE_PARAM_PREFIX
+
+/*
+ * has_blocked_load and needs_update are set by every CPU on idle entry and read
+ * by every CPU on each busy tick. Stay off the shared line when already set.
+ * The barrier pairs with the smp_mb() in _nohz_idle_balance(): it clears the
+ * flag and then reads the CPU state, here we publish the state and then read
+ * the flag, so at least one side sees the other.
+ */
+static __always_inline void nohz_flag_set(int *flag)
+{
+	if (READ_ONCE(wolos_nohz_cheap_store)) {
+		smp_mb();
+		if (!wolos_nohz_needs_store(true, READ_ONCE(*flag)))
+			return;
+	}
+	WRITE_ONCE(*flag, 1);
+}
+
 #endif /* CONFIG_NO_HZ_COMMON */
 
 static unsigned long cpu_load(struct rq *rq)
@@ -14638,13 +14663,13 @@ void nohz_balance_enter_idle(int cpu)
 
 	set_cpu_sd_state_idle(cpu);
 
-	WRITE_ONCE(nohz.needs_update, 1);
+	nohz_flag_set(&nohz.needs_update);
 out:
 	/*
 	 * Each time a cpu enter idle, we assume that it has blocked load and
 	 * enable the periodic update of the load of idle CPUs
 	 */
-	WRITE_ONCE(nohz.has_blocked_load, 1);
+	nohz_flag_set(&nohz.has_blocked_load);
 }
 
 static bool update_nohz_stats(struct rq *rq)

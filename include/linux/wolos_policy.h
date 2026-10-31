@@ -73,4 +73,13 @@ static inline unsigned long wolos_boost_floor(unsigned long now, unsigned long u
 	return cap * (pct > 100 ? 100 : pct) / 100;
 }
 
+/*
+ * nohz: must an idle-entry flag be stored? Reading it first keeps the shared
+ * line clean while the flag is already set.
+ */
+static inline bool wolos_nohz_needs_store(bool cheap, int cur)
+{
+	return !cheap || !cur;
+}
+
 #endif
