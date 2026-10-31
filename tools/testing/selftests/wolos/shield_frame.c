@@ -2,7 +2,7 @@
 /*
  * A game's serial part: one thread sleeps to the next frame boundary, then does
  * a fixed amount of work. Prints the wall time of that work and the wakeup delay
- * in microseconds as "p50 p99 p999 max" pairs.
+ * in microseconds as "p50 p99 p999 max" pairs, then frame = boundary to work done.
  *   shield_frame -c WORK_US            print the loop count for WORK_US of work
  *   shield_frame -l LOOPS -p PERIOD_US -n FRAMES [-w HELPERS] [-f] [-s SLICE_US] [-N NICE]
  * -f writes our pid to /sys/kernel/wolos/foreground_pid. HELPERS threads each do
@@ -90,7 +90,7 @@ static void *helper_fn(void *arg)
 
 int main(int argc, char **argv)
 {
-	uint64_t loops = 0, period_us = 4000, *wk, *lat, next;
+	uint64_t loops = 0, period_us = 4000, *wk, *lat, *done, next;
 	int frames = 2500, helpers = 0, fg = 0, cal = 0, nice = 0, o, i;
 	uint64_t slice_us = 0;
 	struct helper h;
@@ -133,6 +133,7 @@ int main(int argc, char **argv)
 		perror("sched_setattr");
 	wk = calloc(frames, sizeof(*wk));
 	lat = calloc(frames, sizeof(*lat));
+	done = calloc(frames, sizeof(*done));
 	next = now_ns() + period_us * 1000;
 	/* A second of warm-up, so a shield picks the thread and settles. */
 	for (i = -(int)(1500000 / period_us); i < frames; i++) {
@@ -146,6 +147,7 @@ int main(int argc, char **argv)
 		if (i >= 0) {
 			lat[i] = a - next;
 			wk[i] = b - a;
+			done[i] = b - next;
 		}
 		next += period_us * 1000;
 		if (next < b)
@@ -164,6 +166,7 @@ int main(int argc, char **argv)
 	}
 	report("work", wk, frames);
 	report("wake", lat, frames);
+	report("frame", done, frames);
 	printf("\n");
 	return 0;
 }
