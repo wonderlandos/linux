@@ -11,6 +11,8 @@
 #include <linux/sched/signal.h>
 #include <linux/fs.h>
 #include <linux/file.h>
+#include <linux/llist.h>
+#include <linux/moduleparam.h>
 #include <linux/signal.h>
 #include <linux/errno.h>
 #include <linux/mm.h>
@@ -285,6 +287,9 @@ struct epitem {
 
 	/* The structure that describe the interested events and the source fd */
 	struct epoll_event event;
+
+	/* Link on a per-CPU ep->pend list; points to itself when not linked. */
+	struct llist_node pendlink;
 };
 
 /*
@@ -341,6 +346,15 @@ struct eventpoll {
 
 	/* usage count, orchestrates "struct eventpoll" disposal */
 	refcount_t refcount;
+
+	/*
+	 * Items whose ep_poll_callback() found ->lock taken wait here, one
+	 * list per CPU, until the next ep_pend_drain().  Producers never spin
+	 * behind each other or behind the reader.  pend_hint: something may
+	 * be on the lists.
+	 */
+	struct llist_head __percpu *pend;
+	unsigned long pend_hint ____cacheline_aligned_in_smp;
 
 	/* used to defer freeing past ep_get_upwards_depth_proc() RCU walk */
 	struct rcu_head rcu;
@@ -617,7 +631,7 @@ static inline bool ep_events_available(struct eventpoll *ep)
 	unsigned int seq = read_seqcount_begin(&ep->seq);
 
 	return !list_empty_careful(&ep->rdllist) || ep_is_scanning(ep) ||
-		read_seqcount_retry(&ep->seq, seq);
+		READ_ONCE(ep->pend_hint) || read_seqcount_retry(&ep->seq, seq);
 }
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
@@ -958,6 +972,43 @@ static inline void ep_pm_stay_awake_rcu(struct epitem *epi)
 }
 
 
+/* Divert contended callbacks to the per-CPU lists (eventpoll.wolos_pend=0: spin). */
+static bool ep_pend_enabled __read_mostly = true;
+module_param_named(wolos_pend, ep_pend_enabled, bool, 0644);
+MODULE_PARM_DESC(wolos_pend, "ep_poll_callback() does not wait for a busy ep->lock");
+
+/*
+ * Move the per-CPU lists to rdllist.  Writes pair with ep_pend_event(): the
+ * hint is cleared before the lists are read and set after a push, so a push
+ * is either seen here or leaves the hint set.
+ */
+static void ep_pend_drain(struct eventpoll *ep)
+{
+	int cpu;
+
+	lockdep_assert_held(&ep->lock);
+
+	if (!READ_ONCE(ep->pend_hint))
+		return;
+	WRITE_ONCE(ep->pend_hint, 0);
+	smp_mb();
+	for_each_possible_cpu(cpu) {
+		struct llist_node *n = llist_del_all(per_cpu_ptr(ep->pend, cpu));
+
+		while (n) {
+			struct epitem *epi = llist_entry(n, struct epitem, pendlink);
+
+			n = n->next;
+			/* From here on a callback can queue @epi again. */
+			smp_store_release(&epi->pendlink.next, &epi->pendlink);
+			if (!ep_is_linked(epi)) {
+				list_add_tail(&epi->rdllink, &ep->rdllist);
+				ep_pm_stay_awake(epi);
+			}
+		}
+	}
+}
+
 /*
  * ep->mutex needs to be held because we could be hit by
  * eventpoll_release_file() and epoll_ctl().
@@ -974,6 +1025,7 @@ static void ep_start_scan(struct eventpoll *ep, struct list_head *scan_batch)
 	 */
 	lockdep_assert_irqs_enabled();
 	spin_lock_irq(&ep->lock);
+	ep_pend_drain(ep);
 	write_seqcount_begin(&ep->seq);
 
 	list_splice_init(&ep->rdllist, scan_batch);
@@ -981,6 +1033,11 @@ static void ep_start_scan(struct eventpoll *ep, struct list_head *scan_batch)
 
 	write_seqcount_end(&ep->seq);
 	spin_unlock_irq(&ep->lock);
+	/*
+	 * A callback that found an item still on a per-CPU list relies on the
+	 * ->poll() of this scan to see its event: pairs with ep_pend_event().
+	 */
+	smp_mb();
 }
 
 static void ep_done_scan(struct eventpoll *ep,
@@ -1010,6 +1067,7 @@ static void ep_done_scan(struct eventpoll *ep,
 			ep_pm_stay_awake(epi);
 		}
 	}
+	ep_pend_drain(ep);
 
 	write_seqcount_begin(&ep->seq);
 
@@ -1057,6 +1115,7 @@ static void ep_free(struct eventpoll *ep)
 	mutex_destroy(&ep->mtx);
 	free_uid(ep->user);
 	wakeup_source_unregister(ep->ws);
+	free_percpu(ep->pend);
 	/* ep_get_upwards_depth_proc() may still hold epi->ep under RCU */
 	kfree_rcu(ep, rcu);
 }
@@ -1131,6 +1190,9 @@ static void ep_remove_epi(struct eventpoll *ep, struct epitem *epi)
 	rb_erase_cached(&epi->rbn, &ep->rbr);
 
 	spin_lock_irq(&ep->lock);
+	/* The wait entries are gone, so nothing can queue @epi again. */
+	if (llist_on_list(&epi->pendlink))
+		ep_pend_drain(ep);
 	if (ep_is_linked(epi))
 		list_del_init(&epi->rdllink);
 	spin_unlock_irq(&ep->lock);
@@ -1450,6 +1512,8 @@ static int ep_alloc(struct eventpoll **pep)
 	ep->ovflist = EP_UNACTIVE_PTR;	/* not scanning */
 	ep->user = get_current_user();
 	refcount_set(&ep->refcount, 1);
+	/* No per-CPU lists only means callbacks spin on ->lock. */
+	ep->pend = alloc_percpu_gfp(struct llist_head, GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
 
 	*pep = ep;
 
@@ -1484,6 +1548,56 @@ static struct epitem *ep_find(struct eventpoll *ep, struct epoll_key *tf)
 }
 
 /*
+ * ep_poll_callback() with ->lock taken by someone else: queue @epi on this
+ * CPU's list without waiting.  Returns false when only the locked path can
+ * handle the event (EPOLLEXCLUSIVE, POLLFREE, wakeup sources).  *@pwake as in
+ * the locked path.
+ *
+ * Lost-wakeup rules, all full barriers:
+ *  - push, then look for waiters; ep_poll() adds itself, then looks for the
+ *    hint;
+ *  - event, then claim @epi; a scan resets the link, then calls ->poll().
+ */
+static bool ep_pend_event(struct eventpoll *ep, struct epitem *epi,
+			  __poll_t pollflags, int sync, int *pwake)
+{
+	struct llist_node *self = &epi->pendlink;
+	__poll_t events = READ_ONCE(epi->event.events);
+	unsigned long flags;
+
+	if (!READ_ONCE(ep_pend_enabled) || !ep->pend ||
+	    (events & EPOLLEXCLUSIVE) || (pollflags & POLLFREE) ||
+	    ep_has_wakeup_source(epi))
+		return false;
+
+	ep_set_busy_poll_napi_id(epi);
+
+	if (!(events & ~EP_PRIVATE_BITS) || (pollflags && !(pollflags & events)))
+		return true;
+
+	smp_mb();
+	if (try_cmpxchg(&self->next, &self, NULL)) {
+		llist_add(&epi->pendlink, raw_cpu_ptr(ep->pend));
+		if (!READ_ONCE(ep->pend_hint))
+			WRITE_ONCE(ep->pend_hint, 1);
+	}
+	smp_mb();
+
+	/* ep_poll() edits ep->wq under ->lock alone, so wake_up() needs it. */
+	if (waitqueue_active(&ep->wq)) {
+		spin_lock_irqsave(&ep->lock, flags);
+		if (sync)
+			wake_up_sync(&ep->wq);
+		else
+			wake_up(&ep->wq);
+		spin_unlock_irqrestore(&ep->lock, flags);
+	}
+	if (waitqueue_active(&ep->poll_wait))
+		(*pwake)++;
+	return true;
+}
+
+/*
  * This is the callback that is passed to the wait queue wakeup
  * mechanism. It is called by the stored file descriptors when they
  * have events to report.
@@ -1497,7 +1611,11 @@ static int ep_poll_callback(wait_queue_entry_t *wait, unsigned mode, int sync, v
 	unsigned long flags;
 	int ewake = 0;
 
-	spin_lock_irqsave(&ep->lock, flags);
+	if (!spin_trylock_irqsave(&ep->lock, flags)) {
+		if (ep_pend_event(ep, epi, pollflags, sync, &pwake))
+			goto out_pwake;
+		spin_lock_irqsave(&ep->lock, flags);
+	}
 
 	ep_set_busy_poll_napi_id(epi);
 
@@ -1569,6 +1687,7 @@ static int ep_poll_callback(wait_queue_entry_t *wait, unsigned mode, int sync, v
 out_unlock:
 	spin_unlock_irqrestore(&ep->lock, flags);
 
+out_pwake:
 	/* We have to call this outside the lock */
 	if (pwake)
 		ep_poll_safewake(ep, epi, pollflags & EPOLL_URING_WAKE);
@@ -1840,6 +1959,7 @@ static struct epitem *ep_alloc_epitem(struct eventpoll *ep,
 	epi->ffd = *tf;
 	epi->event = *event;
 	epi_clear_ovflist(epi);
+	init_llist_node(&epi->pendlink);
 
 	return epi;
 }
@@ -2337,8 +2457,15 @@ static int ep_poll(struct eventpoll *ep, struct epoll_event __user *events,
 		 * important.
 		 */
 		eavail = ep_events_available(ep);
-		if (!eavail)
+		if (!eavail) {
 			__add_wait_queue_exclusive(&ep->wq, &wait);
+			/* ep_pend_event() does not take the lock to look at wq. */
+			smp_mb();
+			if (READ_ONCE(ep->pend_hint)) {
+				list_del_init(&wait.entry);
+				eavail = true;
+			}
+		}
 
 		spin_unlock_irq(&ep->lock);
 
