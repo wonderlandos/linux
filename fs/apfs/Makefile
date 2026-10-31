@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-only
 obj-$(CONFIG_APFS_FS) += apfs.o
-apfs-y := btree.o compress.o compress_codec.o dir.o extents.o file.o inode.o key.o libzbitmap.o \
+apfs-y := btree.o compress.o compress_codec.o compress_encode.o dir.o extents.o file.o inode.o key.o libzbitmap.o \
 	  lzfse/lzfse_decode.o lzfse/lzfse_decode_base.o lzfse/lzfse_fse.o \
-	  lzfse/lzvn_decode_base.o message.o namei.o node.o object.o snapshot.o \
+	  lzfse/lzvn_decode_base.o \
+	  lzfse_enc/lzfse_encode.o lzfse_enc/lzfse_encode_base.o lzfse_enc/lzfse_fse.o \
+	  lzfse_enc/lzvn_encode_base.o message.o namei.o node.o object.o snapshot.o \
 	  spaceman.o super.o symlink.o transaction.o unicode.o xattr.o xfield.o

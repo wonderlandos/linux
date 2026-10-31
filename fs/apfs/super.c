@@ -1129,6 +1129,31 @@ fail:
 	return err;
 }
 
+/* Mount option value to decmpfs type; 0 if unknown */
+static u32 apfs_compress_algo_from_name(const char *name)
+{
+	if (!strcmp(name, "zlib"))
+		return APFS_COMPRESS_ZLIB_ATTR;
+	if (!strcmp(name, "lzvn"))
+		return APFS_COMPRESS_LZVN_ATTR;
+	if (!strcmp(name, "lzfse"))
+		return APFS_COMPRESS_LZFSE_ATTR;
+	return 0;
+}
+
+static const char *apfs_compress_algo_name(u32 algo)
+{
+	switch (algo) {
+	case APFS_COMPRESS_ZLIB_ATTR:
+		return "zlib";
+	case APFS_COMPRESS_LZVN_ATTR:
+		return "lzvn";
+	case APFS_COMPRESS_LZFSE_ATTR:
+		return "lzfse";
+	}
+	return NULL;
+}
+
 static int apfs_show_options(struct seq_file *seq, struct dentry *root)
 {
 	struct apfs_sb_info *sbi = APFS_SB(root->d_sb);
@@ -1138,6 +1163,8 @@ static int apfs_show_options(struct seq_file *seq, struct dentry *root)
 		seq_printf(seq, ",vol=%u", sbi->s_vol_nr);
 	if (sbi->s_snap_name)
 		seq_printf(seq, ",snap=%s", sbi->s_snap_name);
+	if (sbi->s_compress_algo)
+		seq_printf(seq, ",compress=%s", apfs_compress_algo_name(sbi->s_compress_algo));
 	if (uid_valid(sbi->s_uid))
 		seq_printf(seq, ",uid=%u", from_kuid(&init_user_ns,
 						     sbi->s_uid));
@@ -1207,7 +1234,7 @@ static const struct super_operations apfs_sops = {
 };
 
 enum {
-	Opt_readwrite, Opt_cknodes, Opt_uid, Opt_gid, Opt_vol, Opt_snap, Opt_tier2, Opt_err,
+	Opt_readwrite, Opt_cknodes, Opt_uid, Opt_gid, Opt_vol, Opt_snap, Opt_tier2, Opt_compress, Opt_err,
 };
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(7, 0, 0)
@@ -1219,6 +1246,7 @@ static const match_table_t tokens = {
 	{Opt_vol, "vol=%u"},
 	{Opt_snap, "snap=%s"},
 	{Opt_tier2, "tier2=%s"},
+	{Opt_compress, "compress=%s"},
 	{Opt_err, NULL}
 };
 #else
@@ -1230,6 +1258,7 @@ static const struct fs_parameter_spec apfs_param_spec[] = {
 	fsparam_u32	("vol",		Opt_vol),
 	fsparam_string	("snap",	Opt_snap),
 	fsparam_string	("tier2",	Opt_tier2),
+	fsparam_string	("compress",	Opt_compress),
 	{}
 };
 #endif
@@ -1283,6 +1312,7 @@ static void apfs_set_default_opts(struct apfs_sb_info *sbi)
 	sbi->s_vol_nr = 0;
 	sbi->s_snap_name = NULL;
 	sbi->s_tier2_path = NULL;
+	sbi->s_compress_algo = 0;
 	sbi->s_mount_opt = 0;
 #ifdef CONFIG_APFS_RW_ALWAYS
 	/* Still risky, but some packagers want writable mounts by default */
@@ -1359,6 +1389,17 @@ static int parse_options(struct apfs_sb_info *sbi, char *options)
 				return -EINVAL;
 			}
 			break;
+		case Opt_compress: {
+			char *name = match_strdup(&args[0]);
+
+			if (!name)
+				return -ENOMEM;
+			sbi->s_compress_algo = apfs_compress_algo_from_name(name);
+			kfree(name);
+			if (!sbi->s_compress_algo)
+				return -EINVAL;
+			break;
+		}
 		case Opt_snap:
 			kfree(sbi->s_snap_name);
 			sbi->s_snap_name = match_strdup(&args[0]);
@@ -1414,6 +1455,11 @@ static int apfs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		break;
 	case Opt_vol:
 		sbi->s_vol_nr = result.uint_32;
+		break;
+	case Opt_compress:
+		sbi->s_compress_algo = apfs_compress_algo_from_name(param->string);
+		if (!sbi->s_compress_algo)
+			return -EINVAL;
 		break;
 	case Opt_snap:
 		kfree(sbi->s_snap_name);

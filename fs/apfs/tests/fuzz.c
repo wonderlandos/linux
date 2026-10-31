@@ -1,4 +1,4 @@
-﻿/* userspace fuzz harness for fs/apfs/compress_codec.c, built against shims */
+/* userspace fuzz harness for fs/apfs/compress_codec.c, built against shims */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

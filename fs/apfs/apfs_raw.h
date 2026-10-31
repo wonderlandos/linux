@@ -1445,6 +1445,9 @@ struct apfs_compress_hdr {
 	__le64 size;
 } __packed;
 
+/* The header starts with the bytes "fpmc" in files that Apple writes */
+#define APFS_COMPRESS_MAGIC		0x636d7066
+
 #define APFS_COMPRESS_ZLIB_ATTR		3
 #define APFS_COMPRESS_ZLIB_RSRC		4
 #define APFS_COMPRESS_LZVN_ATTR		7

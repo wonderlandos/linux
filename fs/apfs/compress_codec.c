@@ -1,4 +1,4 @@
-﻿// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Block decoding for decmpfs compressed files. The input is untrusted disk
  * data: every length is checked before it is used, and a block never decodes

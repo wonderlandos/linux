@@ -407,3 +407,128 @@ int apfs_compress_get_size(struct inode *inode, loff_t *size)
 	*size = le64_to_cpu(hdr.size);
 	return 0;
 }
+
+#include <linux/pagemap.h>
+#include <linux/highmem.h>
+#include <linux/xattr.h>
+#include "compress_encode.h"
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
+
+/**
+ * apfs_compress_read_data - Read the whole contents of a small file
+ * @inode:	the file
+ * @data:	buffer with room for i_size bytes
+ */
+static int apfs_compress_read_data(struct inode *inode, u8 *data)
+{
+	size_t n = i_size_read(inode);
+	size_t off = 0;
+
+	while (off < n) {
+		struct folio *folio = read_mapping_folio(inode->i_mapping, off >> PAGE_SHIFT, NULL);
+		size_t fo, len;
+
+		if (IS_ERR(folio))
+			return PTR_ERR(folio);
+		fo = offset_in_folio(folio, off);
+		len = min_t(size_t, n - off, folio_size(folio) - fo);
+		memcpy_from_folio(data + off, folio, fo, len);
+		folio_put(folio);
+		off += len;
+	}
+	return 0;
+}
+
+/**
+ * apfs_compress_inode - Turn a regular file into an inline compressed file
+ * @inode:	the file, with its inode lock held
+ *
+ * Needs the "compress" mount option. The data is compressed into the decmpfs
+ * xattr and the data stream is freed, the way Apple's tools store small
+ * compressed files; nothing happens if the result would not be smaller. Only
+ * files up to one compression block are handled (see the README for what is
+ * left out). Returns 0 on success, or a negative error code in case of
+ * failure.
+ */
+int apfs_compress_inode(struct inode *inode)
+{
+	struct super_block *sb = inode->i_sb;
+	struct apfs_sb_info *sbi = APFS_SB(sb);
+	struct apfs_inode_info *ai = APFS_I(inode);
+	struct apfs_compress_hdr *hdr;
+	size_t n = i_size_read(inode), clen = 0;
+	u8 *data, *blob;
+	int err;
+
+	if (!sbi->s_compress_algo)
+		return -EOPNOTSUPP;
+	if (!S_ISREG(inode->i_mode))
+		return -EINVAL;
+	if (!n || n > APFS_COMPRESS_BLOCK || !ai->i_has_dstream)
+		return -EOPNOTSUPP;
+	if (ai->i_dstream.ds_shared || apfs_vol_is_encrypted(sb) ||
+	    (ai->i_int_flags & APFS_INODE_HAS_RSRC_FORK))
+		return -EOPNOTSUPP;
+
+	err = filemap_write_and_wait(inode->i_mapping);
+	if (err)
+		return err;
+
+	data = kvmalloc(n, GFP_KERNEL);
+	blob = kvmalloc(APFS_XATTR_MAX_EMBEDDED_SIZE, GFP_KERNEL);
+	if (!data || !blob) {
+		err = -ENOMEM;
+		goto out;
+	}
+	err = apfs_compress_read_data(inode, data);
+	if (err)
+		goto out;
+
+	hdr = (struct apfs_compress_hdr *)blob;
+	err = apfs_compress_encode_block(sbi->s_compress_algo, data, n, blob + sizeof(*hdr),
+					 APFS_XATTR_MAX_EMBEDDED_SIZE - sizeof(*hdr), &clen);
+	if (!err && sizeof(*hdr) + clen >= n)
+		err = -ENOSPC;
+	if (err)
+		goto out;
+	hdr->signature = cpu_to_le32(APFS_COMPRESS_MAGIC);
+	hdr->algo = cpu_to_le32(sbi->s_compress_algo);
+	hdr->size = cpu_to_le64(n);
+
+	err = apfs_transaction_start(sb, APFS_TRANS_REG);
+	if (err)
+		goto out;
+	apfs_inode_join_transaction(sb, inode);
+
+	err = apfs_xattr_set(inode, APFS_XATTR_NAME_COMPRESSED, blob, sizeof(*hdr) + clen, XATTR_CREATE);
+	if (!err)
+		err = apfs_inode_drop_dstream(inode);
+	if (err) {
+		apfs_transaction_abort(sb);
+		goto out;
+	}
+
+	ai->i_bsd_flags |= APFS_INOBSD_COMPRESSED;
+	ai->i_int_flags |= APFS_INODE_HAS_UNCOMPRESSED_SIZE;
+	inode->i_blocks = (n + 511) >> 9;
+	inode->i_fop = &apfs_compress_file_operations;
+	inode->i_mapping->a_ops = &apfs_compress_aops;
+
+	err = apfs_transaction_commit(sb);
+	if (err)
+		apfs_transaction_abort(sb);
+out:
+	kvfree(blob);
+	kvfree(data);
+	return err;
+}
+
+#else /* LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0) */
+
+int apfs_compress_inode(struct inode *inode)
+{
+	return -EOPNOTSUPP;
+}
+
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0) */

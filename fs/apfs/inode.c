@@ -259,6 +259,33 @@ static int apfs_put_dstream_rec(struct apfs_dstream_info *dstream)
 }
 
 /**
+ * apfs_inode_drop_dstream - Free the data of an inode that is becoming a compressed file
+ * @inode: the vfs inode
+ *
+ * Must be called inside a transaction. The inode ends up with no data stream
+ * record, like the ones that were never written to. Returns 0 on success, or
+ * a negative error code in case of failure.
+ */
+int apfs_inode_drop_dstream(struct inode *inode)
+{
+	struct apfs_inode_info *ai = APFS_I(inode);
+	struct apfs_dstream_info *dstream = &ai->i_dstream;
+	int err;
+
+	if (!ai->i_has_dstream)
+		return 0;
+	err = apfs_truncate(dstream, 0);
+	if (err)
+		return err;
+	err = apfs_put_dstream_rec(dstream);
+	if (err)
+		return err;
+	ai->i_has_dstream = false;
+	dstream->ds_size = 0;
+	return 0;
+}
+
+/**
  * apfs_create_crypto_rec - Create the crypto state record for an inode
  * @inode: the vfs inode
  *
@@ -1361,6 +1388,66 @@ fail:
 }
 
 /**
+ * apfs_remove_dstream_xfield - Remove the dstream xfield from an inode record, if present
+ * @inode:	the in-memory inode
+ * @query:	the query that found the inode record
+ *
+ * Returns 0 on success, or a negative error code in case of failure.
+ */
+static int apfs_remove_dstream_xfield(struct inode *inode, struct apfs_query *query)
+{
+	struct super_block *sb = inode->i_sb;
+	char *raw = query->node->object.data;
+	struct apfs_inode_val *old_val = (struct apfs_inode_val *)(raw + query->off);
+	struct apfs_inode_val *new_val;
+	struct apfs_xf_blob *blob;
+	struct apfs_x_field *xkey;
+	char *xval;
+	int xlen, xbuflen, total = 0, i, num, err = 0;
+	u8 *data;
+
+	xbuflen = query->len - sizeof(*old_val);
+	if (xbuflen < (int)sizeof(*blob))
+		return 0;
+	if (!apfs_find_xfield(old_val->xfields, xbuflen, APFS_INO_EXT_TYPE_DSTREAM, &xval))
+		return 0;
+
+	new_val = kzalloc(query->len, GFP_KERNEL);
+	if (!new_val)
+		return -ENOMEM;
+	memcpy(new_val, old_val, sizeof(*old_val));
+	apfs_init_xfields(new_val->xfields, xbuflen);
+
+	blob = (struct apfs_xf_blob *)old_val->xfields;
+	num = le16_to_cpu(blob->xf_num_exts);
+	xkey = (struct apfs_x_field *)blob->xf_data;
+	data = blob->xf_data + num * sizeof(*xkey);
+	for (i = 0; i < num; ++i, ++xkey) {
+		xlen = le16_to_cpu(xkey->x_size);
+		if (data + round_up(xlen, 8) > (u8 *)old_val + query->len) {
+			err = -EFSCORRUPTED;
+			goto out;
+		}
+		if (xkey->x_type != APFS_INO_EXT_TYPE_DSTREAM) {
+			total = apfs_insert_xfield(new_val->xfields, xbuflen, xkey, data);
+			if (!total) {
+				err = -EFSCORRUPTED;
+				goto out;
+			}
+		}
+		data += round_up(xlen, 8);
+	}
+
+	err = apfs_btree_replace(query, NULL /* key */, 0 /* key_len */, new_val,
+				 sizeof(*new_val) + total);
+	if (err)
+		apfs_err(sb, "xfield removal failed for ino 0x%llx", apfs_ino(inode));
+out:
+	kfree(new_val);
+	return err;
+}
+
+/**
  * apfs_inode_resize - Update the sizes reported in an inode record
  * @inode:	the in-memory inode
  * @query:	the query that found the inode record
@@ -1377,8 +1464,12 @@ static int apfs_inode_resize(struct inode *inode, struct apfs_query *query)
 	int err;
 
 	/* All dstream records must have a matching xfield, even if empty */
-	if (!ai->i_has_dstream)
+	if (!ai->i_has_dstream) {
+		/* Compressed files keep their data in an xattr, with no dstream */
+		if (ai->i_bsd_flags & APFS_INOBSD_COMPRESSED)
+			return apfs_remove_dstream_xfield(inode, query);
 		return 0;
+	}
 
 	err = apfs_query_join_transaction(query);
 	if (err) {
@@ -1607,6 +1698,8 @@ int apfs_update_inode(struct inode *inode, char *new_name)
 		/* The remaining link for orphan inodes is not counted */
 		inode_raw->nlink = cpu_to_le32(inode->i_nlink);
 	}
+	if ((ai->i_bsd_flags & APFS_INOBSD_COMPRESSED) && (ai->i_int_flags & APFS_INODE_HAS_UNCOMPRESSED_SIZE))
+		inode_raw->uncompressed_size = cpu_to_le64(inode->i_size);
 
 fail:
 	apfs_free_query(query);
@@ -2380,6 +2473,8 @@ static unsigned int apfs_getflags(struct inode *inode)
 		flags |= FS_IMMUTABLE_FL;
 	if (ai->i_bsd_flags & APFS_INOBSD_NODUMP)
 		flags |= FS_NODUMP_FL;
+	if (ai->i_bsd_flags & APFS_INOBSD_COMPRESSED)
+		flags |= FS_COMPR_FL;
 	return flags;
 }
 
@@ -2566,12 +2661,21 @@ int apfs_fileattr_set(const struct mnt_idmap *idmap, struct dentry *dentry, stru
 	if (sb->s_flags & SB_RDONLY)
 		return -EROFS;
 
-	if (fa->flags & ~(FS_APPEND_FL | FS_IMMUTABLE_FL | FS_NODUMP_FL))
+	if (fa->flags & ~(FS_APPEND_FL | FS_IMMUTABLE_FL | FS_NODUMP_FL | FS_COMPR_FL))
 		return -EOPNOTSUPP;
 	if (fileattr_has_fsx(fa))
 		return -EOPNOTSUPP;
 
 	lockdep_assert_held_write(&inode->i_rwsem);
+
+	/* Compressing is a one way trip: chattr +c works, and -c doesn't */
+	if (!(fa->flags & FS_COMPR_FL) != !(apfs_getflags(inode) & FS_COMPR_FL)) {
+		if (!(fa->flags & FS_COMPR_FL))
+			return -EOPNOTSUPP;
+		err = apfs_compress_inode(inode);
+		if (err)
+			return err;
+	}
 
 	err = apfs_transaction_start(sb, APFS_TRANS_REG);
 	if (err)

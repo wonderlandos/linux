@@ -391,6 +391,8 @@ struct apfs_sb_info {
 
 	char *s_tier2_path; /* Path to the tier 2 device */
 
+	u32 s_compress_algo; /* decmpfs type for new compressed files; 0 if off */
+
 	char *s_snap_name; /* Label for the mounted snapshot */
 	u64 s_snap_xid; /* Transaction id for mounted snapshot */
 
@@ -1025,6 +1027,8 @@ extern int apfs_dstream_get_new_bno(struct apfs_dstream_info *dstream, u64 dsblo
 extern int apfs_get_new_block(struct inode *inode, sector_t iblock,
 			      struct buffer_head *bh_result, int create);
 extern int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size);
+extern int apfs_inode_drop_dstream(struct inode *inode);
+extern int apfs_compress_inode(struct inode *inode);
 extern int apfs_inode_delete_front(struct inode *inode);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
 extern loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, loff_t len, unsigned int remap_flags);

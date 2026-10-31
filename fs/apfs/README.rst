@@ -119,3 +119,20 @@ imitate the ext2 module, and to a lesser degree xfs, udf, gfs2 and hfsplus.
    Investigation (2017), https://dx.doi.org/10.1016/j.diin.2017.07.003
 .. [2] https://github.com/sgan81/apfs-fuse
 .. [3] https://developer.apple.com/support/apple-file-system/Apple-File-System-Reference.pdf
+
+Compression (decmpfs)
+=====================
+
+Compressed files made by macOS are readable: zlib, LZVN, LZFSE and lzbitmap, both
+in the ``com.apple.decmpfs`` xattr and in the resource fork. Writing to a
+compressed file is refused.
+
+With ``-o readwrite,compress=zlib|lzvn|lzfse`` ``chattr +c FILE`` turns a regular
+file of up to 64 KiB into an inline compressed file: the data goes into the
+decmpfs xattr (type 3, 7 or 11) and the data stream is freed. Nothing changes if
+the result would not be smaller or does not fit in the xattr (about 3.7 KiB).
+Resource-fork compression is not written, and ``chattr -c`` is refused.
+The LZFSE and LZVN encoders in ``lzfse_enc`` are Apple's (BSD-3-Clause) with small
+changes listed in the files. ``tests/`` has userspace tests and a fuzzer for the
+decoders and encoders, and ``tests/ref-check.sh`` decodes the encoder output with
+Apple's reference code.
