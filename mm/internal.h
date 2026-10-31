@@ -267,6 +267,13 @@ static inline void vma_close(struct vm_area_struct *vma)
 
 /* unmap_vmas is in mm/memory.c */
 void unmap_vmas(struct mmu_gather *tlb, struct unmap_desc *unmap);
+#ifdef CONFIG_WOLOS_EXIT_TEARDOWN
+void zap_exiting_vma_range(struct vm_area_struct *vma, unsigned long start,
+			   unsigned long end);
+void exit_mmap_zap_parallel(struct mm_struct *mm);
+#else
+static inline void exit_mmap_zap_parallel(struct mm_struct *mm) { }
+#endif
 
 #ifdef CONFIG_MMU
 

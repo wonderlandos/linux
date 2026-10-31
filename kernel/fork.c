@@ -1180,7 +1180,7 @@ struct mm_struct *mm_alloc(void)
 }
 EXPORT_SYMBOL_IF_KUNIT(mm_alloc);
 
-static inline void __mmput(struct mm_struct *mm)
+void __mmput(struct mm_struct *mm)
 {
 	VM_BUG_ON(atomic_read(&mm->mm_users));
 
@@ -1214,6 +1214,21 @@ void mmput(struct mm_struct *mm)
 		__mmput(mm);
 }
 EXPORT_SYMBOL_GPL(mmput);
+
+#ifdef CONFIG_WOLOS_EXIT_TEARDOWN
+/* mmput() of an exiting task: the anonymous memory may outlive wait(2). */
+void mmput_exit(struct mm_struct *mm)
+{
+	might_sleep();
+
+	if (!atomic_dec_and_test(&mm->mm_users))
+		return;
+	if (mm_teardown_prepare(mm))
+		mm_teardown_queue(mm);
+	else
+		__mmput(mm);
+}
+#endif
 
 #if defined(CONFIG_MMU) || defined(CONFIG_FUTEX_PRIVATE_HASH)
 static void mmput_async_fn(struct work_struct *work)

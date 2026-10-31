@@ -1490,6 +1490,17 @@ config LAZY_MMU_MODE_KUNIT_TEST
 
 	  If unsure, say N.
 
+config WOLOS_EXIT_TEARDOWN
+	bool "Free the memory of large exiting processes in parallel, after wait(2)"
+	depends on WOLOS_BEND && MMU
+	default y
+	help
+	  exit_mmap() zaps large anonymous VMAs on idle CPUs.  The last thread
+	  of a process with a lot of anonymous memory releases its files and
+	  leaves the anonymous memory to a worker, which out_of_memory() waits
+	  for.  wolos_mm.exit_par_min_mb=0 and wolos_mm.exit_async_min_mb=0
+	  turn the two parts off.
+
 source "mm/damon/Kconfig"
 
 endmenu

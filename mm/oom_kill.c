@@ -1115,6 +1115,10 @@ bool out_of_memory(struct oom_control *oc)
 			return true;
 	}
 
+	/* An exited process' memory is about to come back. */
+	if (!is_sysrq_oom(oc) && mm_teardown_wait())
+		return true;
+
 	/*
 	 * If current has a pending SIGKILL or is exiting, then automatically
 	 * select it.  The goal is to allow it to allocate so that it may

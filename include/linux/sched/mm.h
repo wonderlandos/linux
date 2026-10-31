@@ -140,6 +140,16 @@ static inline bool mmget_not_zero(struct mm_struct *mm)
 
 /* mmput gets rid of the mappings and all user-space */
 extern void mmput(struct mm_struct *);
+void __mmput(struct mm_struct *mm);
+#ifdef CONFIG_WOLOS_EXIT_TEARDOWN
+void mmput_exit(struct mm_struct *mm);
+bool mm_teardown_prepare(struct mm_struct *mm);
+void mm_teardown_queue(struct mm_struct *mm);
+bool mm_teardown_wait(void);
+#else
+static inline void mmput_exit(struct mm_struct *mm) { mmput(mm); }
+static inline bool mm_teardown_wait(void) { return false; }
+#endif
 #if defined(CONFIG_MMU) || defined(CONFIG_FUTEX_PRIVATE_HASH)
 /* same as above but performs the slow path from the async context. Can
  * be called from the atomic context as well

@@ -2237,6 +2237,22 @@ int zap_vma_for_reaping(struct vm_area_struct *vma)
 	return 0;
 }
 
+#ifdef CONFIG_WOLOS_EXIT_TEARDOWN
+/* A piece of exit_mmap(): @vma's mm is dead, mmap_read_lock held. */
+void zap_exiting_vma_range(struct vm_area_struct *vma, unsigned long start,
+			   unsigned long end)
+{
+	struct zap_details details = {
+		.zap_flags = ZAP_FLAG_DROP_MARKER | ZAP_FLAG_UNMAP,
+	};
+	struct mmu_gather tlb;
+
+	tlb_gather_mmu_fullmm(&tlb, vma->vm_mm);
+	__zap_vma_range(&tlb, vma, start, end, &details);
+	tlb_finish_mmu(&tlb);
+}
+#endif
+
 /**
  * unmap_vmas - unmap a range of memory covered by a list of vma's
  * @tlb: address of the caller's struct mmu_gather
