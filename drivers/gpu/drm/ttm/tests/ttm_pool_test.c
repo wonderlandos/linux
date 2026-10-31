@@ -8,6 +8,8 @@
 #include <drm/ttm/ttm_pool.h>
 
 #include "ttm_kunit_helpers.h"
+
+extern bool ttm_pool_batch_clear;
 #include "../ttm_pool_internal.h"
 
 struct ttm_pool_test_case {
@@ -405,6 +407,55 @@ static void ttm_pool_fini_basic(struct kunit *test)
 	KUNIT_ASSERT_TRUE(test, !list_lru_count(&pt->pages));
 }
 
+/* Pages handed back to a pool must read as zero when allocated again. */
+static void ttm_pool_give_clears(struct kunit *test, bool batch)
+{
+	struct ttm_pool_test_priv *priv = test->priv;
+	struct ttm_test_devices *devs = priv->devs;
+	const size_t size = PAGE_SIZE << 4;
+	bool old = ttm_pool_batch_clear;
+	struct ttm_pool *pool;
+	struct ttm_tt *tt;
+	unsigned int i;
+	int err;
+
+	pool = kunit_kzalloc(test, sizeof(*pool), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, pool);
+	ttm_pool_init(pool, devs->dev, NUMA_NO_NODE, TTM_ALLOCATION_POOL_USE_DMA_ALLOC);
+
+	tt = ttm_tt_kunit_init(test, 0, ttm_cached, size);
+	err = ttm_pool_alloc(pool, tt, &simple_ctx);
+	KUNIT_ASSERT_EQ(test, err, 0);
+	for (i = 0; i < tt->num_pages; i++)
+		memset(page_address(tt->pages[i]), 0xa5, PAGE_SIZE);
+
+	ttm_pool_batch_clear = batch;
+	ttm_pool_free(pool, tt);
+	ttm_pool_batch_clear = old;
+	ttm_tt_fini(tt);
+
+	tt = ttm_tt_kunit_init(test, 0, ttm_cached, size);
+	err = ttm_pool_alloc(pool, tt, &simple_ctx);
+	KUNIT_ASSERT_EQ(test, err, 0);
+	for (i = 0; i < tt->num_pages; i++)
+		KUNIT_EXPECT_TRUE(test, !memchr_inv(page_address(tt->pages[i]),
+						    0, PAGE_SIZE));
+
+	ttm_pool_free(pool, tt);
+	ttm_tt_fini(tt);
+	ttm_pool_fini(pool);
+}
+
+static void ttm_pool_give_clears_per_page(struct kunit *test)
+{
+	ttm_pool_give_clears(test, false);
+}
+
+static void ttm_pool_give_clears_batch(struct kunit *test)
+{
+	ttm_pool_give_clears(test, true);
+}
+
 static struct kunit_case ttm_pool_test_cases[] = {
 	KUNIT_CASE_PARAM(ttm_pool_alloc_basic, ttm_pool_alloc_basic_gen_params),
 	KUNIT_CASE_PARAM(ttm_pool_alloc_basic_dma_addr,
@@ -415,6 +466,8 @@ static struct kunit_case ttm_pool_test_cases[] = {
 	KUNIT_CASE(ttm_pool_free_dma_alloc),
 	KUNIT_CASE(ttm_pool_free_no_dma_alloc),
 	KUNIT_CASE(ttm_pool_fini_basic),
+	KUNIT_CASE(ttm_pool_give_clears_per_page),
+	KUNIT_CASE(ttm_pool_give_clears_batch),
 	{}
 };
 

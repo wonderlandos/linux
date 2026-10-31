@@ -31,6 +31,7 @@
  * cause they are rather slow compared to alloc_pages+map.
  */
 
+#include <kunit/visibility.h>
 #include <linux/export.h>
 #include <linux/module.h>
 #include <linux/dma-mapping.h>
@@ -128,6 +129,16 @@ struct ttm_pool_tt_restore {
 	enum ttm_caching page_caching;
 	unsigned int order;
 };
+
+/*
+ * Clear a pool page in one go: rep stos over the range instead of one call per
+ * 4K page. Largest pool order is MAX_PAGE_ORDER, well under
+ * PROCESS_PAGES_NON_PREEMPT_BATCH, so one call is safe.
+ */
+bool ttm_pool_batch_clear;
+EXPORT_SYMBOL_IF_KUNIT(ttm_pool_batch_clear);
+MODULE_PARM_DESC(batch_clear, "Clear freed pool pages as one range (default off)");
+module_param_named(batch_clear, ttm_pool_batch_clear, bool, 0644);
 
 static unsigned long page_pool_size;
 
@@ -328,11 +339,15 @@ static void ttm_pool_type_give(struct ttm_pool_type *pt, struct page *p)
 	unsigned int i, num_pages = 1 << pt->order;
 	int nid = page_to_nid(p);
 
-	for (i = 0; i < num_pages; ++i) {
-		if (PageHighMem(p))
-			clear_highpage(p + i);
-		else
-			clear_page(page_address(p + i));
+	if (ttm_pool_batch_clear && !PageHighMem(p)) {
+		clear_pages(page_address(p), num_pages);
+	} else {
+		for (i = 0; i < num_pages; ++i) {
+			if (PageHighMem(p))
+				clear_highpage(p + i);
+			else
+				clear_page(page_address(p + i));
+		}
 	}
 
 	INIT_LIST_HEAD(&p->lru);
