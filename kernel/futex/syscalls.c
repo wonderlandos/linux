@@ -318,21 +318,19 @@ static inline void futex2_destroy_timeout(struct hrtimer_sleeper *to)
  * smallest index, nor the one most recently woken, nor...)
  */
 
-SYSCALL_DEFINE5(futex_waitv, struct futex_waitv __user *, waiters,
-		unsigned int, nr_futexes, unsigned int, flags,
-		struct __kernel_timespec __user *, timeout, clockid_t, clockid)
+/*
+ * The blocking half of sys_futex_waitv(): out of line, because its frame holds
+ * the vector and the timer that the non-blocking answer never touches.
+ */
+static noinline long futex_waitv_block(struct futex_waitv __user *waiters,
+				       unsigned int nr_futexes,
+				       struct __kernel_timespec __user *timeout,
+				       clockid_t clockid)
 {
-	struct futex_vector inline_futexv[FUTEX_WAITV_INLINE];
-	struct hrtimer_sleeper to;
+	struct futex_vector inline_futexv[FUTEX_WAITV_INLINE] __uninitialized;
+	struct hrtimer_sleeper to __uninitialized;
 	struct futex_vector *futexv;
 	int ret;
-
-	/* This syscall supports no flags for now */
-	if (flags)
-		return -EINVAL;
-
-	if (!nr_futexes || nr_futexes > FUTEX_WAITV_MAX || !waiters)
-		return -EINVAL;
 
 	if (timeout && (ret = futex2_setup_timeout(timeout, clockid, &to)))
 		return ret;
@@ -360,6 +358,26 @@ destroy_timer:
 	if (timeout)
 		futex2_destroy_timeout(&to);
 	return ret;
+}
+
+
+SYSCALL_DEFINE5(futex_waitv, struct futex_waitv __user *, waiters,
+		unsigned int, nr_futexes, unsigned int, flags,
+		struct __kernel_timespec __user *, timeout, clockid_t, clockid)
+{
+	/* This syscall supports no flags for now */
+	if (flags)
+		return -EINVAL;
+
+	if (!nr_futexes || nr_futexes > FUTEX_WAITV_MAX || !waiters)
+		return -EINVAL;
+
+	if (READ_ONCE(futex_precheck_on) &&
+	    (!timeout || clockid == CLOCK_MONOTONIC || clockid == CLOCK_REALTIME) &&
+	    futex_waitv_scan(waiters, nr_futexes, timeout) == FUTEX_SCAN_DIFFERS)
+		return -EWOULDBLOCK;
+
+	return futex_waitv_block(waiters, nr_futexes, timeout, clockid);
 }
 
 /*

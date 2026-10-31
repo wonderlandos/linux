@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 futex_lock_pi_exiting
+futex_numa
 futex_numa_mpol
 futex_priv_hash
 futex_requeue
@@ -12,5 +13,5 @@ futex_wait_timeout
 futex_wait_uninitialized_heap
 futex_wait_wouldblock
 futex_waitv
-futex_numa
+futex_waitv_semantics
 robust_list
