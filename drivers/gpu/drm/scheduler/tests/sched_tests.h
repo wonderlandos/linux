@@ -105,6 +105,10 @@ struct drm_mock_sched_job {
 	unsigned int		duration_us;
 	ktime_t			finish_at;
 
+	ktime_t			pushed_at;
+	ktime_t			ran_at;
+	int			run_nice;
+
 	struct dma_fence	hw_fence;
 
 	struct kunit		*test;

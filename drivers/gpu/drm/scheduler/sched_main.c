@@ -68,6 +68,7 @@
 
 #include <linux/export.h>
 #include <linux/wait.h>
+#include <kunit/visibility.h>
 #include <linux/sched.h>
 #include <linux/completion.h>
 #include <linux/dma-resv.h>
@@ -84,6 +85,11 @@
 #include "gpu_scheduler_trace.h"
 
 int drm_sched_policy = DRM_SCHED_POLICY_FIFO;
+
+bool drm_sched_submit_highpri;
+EXPORT_SYMBOL_IF_KUNIT(drm_sched_submit_highpri);
+MODULE_PARM_DESC(submit_highpri, "Run jobs from a high priority workqueue (default off). Read when a scheduler is created.");
+module_param_named(submit_highpri, drm_sched_submit_highpri, bool, 0444);
 
 /**
  * DOC: sched_policy (int)
@@ -1072,6 +1078,9 @@ static void drm_sched_run_job_work(struct work_struct *w)
 
 static struct workqueue_struct *drm_sched_alloc_wq(const char *name)
 {
+	unsigned int flags = WQ_MEM_RECLAIM |
+			     (drm_sched_submit_highpri ? WQ_HIGHPRI : 0);
+
 #if (IS_ENABLED(CONFIG_LOCKDEP))
 	static struct lockdep_map map = {
 		.name = "drm_sched_lockdep_map"
@@ -1083,9 +1092,9 @@ static struct workqueue_struct *drm_sched_alloc_wq(const char *name)
 	 * allocated submit_wq.
 	 */
 
-	return alloc_ordered_workqueue_lockdep_map(name, WQ_MEM_RECLAIM, &map);
+	return alloc_ordered_workqueue_lockdep_map(name, flags, &map);
 #else
-	return alloc_ordered_workqueue(name, WQ_MEM_RECLAIM);
+	return alloc_ordered_workqueue(name, flags);
 #endif
 }
 

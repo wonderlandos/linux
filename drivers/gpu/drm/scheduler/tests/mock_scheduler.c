@@ -169,6 +169,9 @@ static struct dma_fence *mock_sched_run_job(struct drm_sched_job *sched_job)
 		drm_sched_to_mock_sched(sched_job->sched);
 	struct drm_mock_sched_job *job = drm_sched_job_to_mock_job(sched_job);
 
+	job->ran_at = ktime_get();
+	job->run_nice = task_nice(current);
+
 	dma_fence_init(&job->hw_fence,
 		       &drm_mock_sched_hw_fence_ops,
 		       &sched->lock,

@@ -34,6 +34,9 @@ struct drm_sched_entity_stats {
 /* Used to choose between FIFO and RR job-scheduling */
 extern int drm_sched_policy;
 
+/* Run job submission on a high priority workqueue. */
+extern bool drm_sched_submit_highpri;
+
 #define DRM_SCHED_POLICY_RR    0
 #define DRM_SCHED_POLICY_FIFO  1
 #define DRM_SCHED_POLICY_FAIR  2
