@@ -31,6 +31,7 @@
 #include <linux/iversion.h>
 #include <linux/swap.h>
 #include <linux/migrate.h>
+#include <linux/moduleparam.h>
 #include <linux/sched/mm.h>
 #include <linux/iomap.h>
 #include <linux/unaligned.h>
@@ -865,6 +866,24 @@ static void round_up_last_block(struct compressed_bio *cb, u32 blocksize)
  * compressed inodes and uncompressed inodes are written in the same order that
  * the flusher thread sent them down.
  */
+/*
+ * Largest piece of a file compressed as one extent.  A read of any byte of a
+ * compressed extent decompresses all of it, so a smaller piece makes small
+ * random reads cheaper and costs ratio and metadata.  Any size up to
+ * BTRFS_MAX_UNCOMPRESSED is valid on disk and readable by every kernel.
+ */
+static unsigned int compress_chunk_bytes = BTRFS_MAX_UNCOMPRESSED;
+module_param_named(compress_chunk, compress_chunk_bytes, uint, 0644);
+MODULE_PARM_DESC(compress_chunk, "Bytes compressed as one extent, up to 128K");
+
+static u32 compress_chunk(u32 blocksize)
+{
+	u32 bytes = READ_ONCE(compress_chunk_bytes);
+
+	return clamp_t(u32, round_down(bytes, blocksize), blocksize,
+		       BTRFS_MAX_UNCOMPRESSED);
+}
+
 static void compress_file_range(struct btrfs_work *work)
 {
 	struct async_chunk *async_chunk =
@@ -915,7 +934,7 @@ static void compress_file_range(struct btrfs_work *work)
 	actual_end = min_t(u64, i_size, end + 1);
 again:
 	total_in = 0;
-	cur_len = min(end + 1 - start, BTRFS_MAX_UNCOMPRESSED);
+	cur_len = min3(end + 1 - start, BTRFS_MAX_UNCOMPRESSED, compress_chunk(blocksize));
 	ret = 0;
 	cb = NULL;
 
