@@ -12,7 +12,9 @@
 #include <linux/mm.h>
 #include <linux/sizes.h>
 #include <linux/kthread.h>
+#include <linux/panic.h>
 #include <linux/random.h>
+#include <linux/sched/mm.h>
 #include <linux/slab.h>
 #include <linux/wolos_bend.h>
 
@@ -457,6 +459,34 @@ static void fork_join_parallel(struct kunit *t)
 	KUNIT_EXPECT_GT(t, cpumask_weight(&c->cpus), 1);
 }
 
+/* Reclaim may fork and join: no allocation that reclaims, a queue with a rescuer. */
+static void fork_join_in_reclaim(struct kunit *t)
+{
+	struct fj_ctx *c = kunit_kzalloc(t, sizeof(*c), GFP_KERNEL);
+	struct bend_job job = { .fn = fj_fn, .start = 0, .end = 2048, .grain = 8 };
+	bool warned = test_taint(TAINT_WARN);
+	unsigned int noreclaim;
+	int i;
+
+	KUNIT_ASSERT_NOT_NULL(t, c);
+	c->hits = kunit_kcalloc(t, 2048, sizeof(*c->hits), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(t, c->hits);
+	spin_lock_init(&c->lock);
+	job.arg = c;
+	/* Direct reclaim's lock map: lockdep reports any GFP_KERNEL under it. */
+	fs_reclaim_acquire(GFP_KERNEL);
+	bend_fork_join(&job);
+	fs_reclaim_release(GFP_KERNEL);
+	/* kswapd's flag: flushing a queue without a rescuer warns. */
+	noreclaim = memalloc_noreclaim_save();
+	bend_fork_join(&job);
+	memalloc_noreclaim_restore(noreclaim);
+	for (i = 0; i < 2048; i++)
+		KUNIT_EXPECT_EQ(t, atomic_read(&c->hits[i]), 2);
+	KUNIT_EXPECT_TRUE(t, debug_locks);
+	KUNIT_EXPECT_EQ(t, test_taint(TAINT_WARN), warned);
+}
+
 /* Several callers at once: jobs never mix. */
 static int fj_many(int i, void *p)
 {
@@ -547,6 +577,7 @@ static struct kunit_case bend_cases[] = {
 	KUNIT_CASE_SLOW(pool_stress),
 	KUNIT_CASE(fork_join_cover),
 	KUNIT_CASE(fork_join_parallel),
+	KUNIT_CASE(fork_join_in_reclaim),
 	KUNIT_CASE_SLOW(fork_join_concurrent),
 	KUNIT_CASE(clear_policy),
 	KUNIT_CASE(clear_zeroes),
