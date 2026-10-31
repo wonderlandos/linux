@@ -15,10 +15,11 @@ for r in $(seq ${ROUNDS:-3}); do for v in 1 0; do
 	[ $v = 1 ] && n=lazy || n=eager
 	cat $g/memory.pressure > /dev/null
 	(echo $BASHPID > $g/cgroup.procs; exec stress-ng --vm 2 --vm-bytes 256M -t ${SECS:-12} --quiet) &
-	wait $!
+	s=$!; sleep ${SECS:-12}
 	t=$(awk '/^some/{sub("total=","",$5); print $5}' $g/memory.pressure)
 	a=$(awk '/^some/{sub("avg10=","",$2); print $2}' $g/memory.pressure)
 	echo "$n $t $a"
+	echo max > $g/memory.high; wait $s; sleep 1
 	[ "${t:-0}" -gt 0 ] || rc=1
 	rmdir $g 2>/dev/null
 done; done
