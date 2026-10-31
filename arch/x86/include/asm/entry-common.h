@@ -78,7 +78,8 @@ static inline void arch_exit_to_user_mode_prepare(struct pt_regs *regs,
 	 * special case only applies after poking regs and before the
 	 * very next return to user mode.
 	 */
-	current_thread_info()->status &= ~(TS_COMPAT | TS_I386_REGS_POKED);
+	if (unlikely(current_thread_info()->status & (TS_COMPAT | TS_I386_REGS_POKED)))
+		current_thread_info()->status &= ~(TS_COMPAT | TS_I386_REGS_POKED);
 #endif
 
 	/* Avoid unnecessary reads of 'x86_ibpb_exit_to_user' */
