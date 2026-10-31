@@ -1186,6 +1186,25 @@ void wake_up_q(struct wake_q_head *head)
 }
 
 /*
+ * Like wake_up_q() for a waker about to block: the wakees run on this CPU once
+ * it does, with no IPI and no idle CPU to wait for. The caller knows it is so.
+ */
+void wake_up_q_sync(struct wake_q_head *head)
+{
+	struct wake_q_node *node = head->first;
+
+	while (node != WAKE_Q_TAIL) {
+		struct task_struct *task;
+
+		task = container_of(node, struct task_struct, wake_q);
+		node = node->next;
+		WRITE_ONCE(task->wake_q.next, NULL);
+		try_to_wake_up(task, TASK_NORMAL, WF_SYNC | WF_CURRENT_CPU);
+		put_task_struct(task);
+	}
+}
+
+/*
  * resched_curr - mark rq's current task 'to be rescheduled now'.
  *
  * On UP this means the setting of the need_resched flag, on SMP it

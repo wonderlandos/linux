@@ -329,7 +329,7 @@ static noinline long futex_waitv_block(struct futex_waitv __user *waiters,
 {
 	struct futex_vector inline_futexv[FUTEX_WAITV_INLINE] __uninitialized;
 	struct hrtimer_sleeper to __uninitialized;
-	struct futex_vector *futexv;
+	struct futex_vector *futexv, *task_vector = NULL;
 	int ret;
 
 	if (timeout && (ret = futex2_setup_timeout(timeout, clockid, &to)))
@@ -339,7 +339,9 @@ static noinline long futex_waitv_block(struct futex_waitv __user *waiters,
 	if (futex_waitv_inline(nr_futexes)) {
 		futexv = inline_futexv;
 	} else {
-		futexv = kzalloc_objs(*futexv, nr_futexes);
+		task_vector = futexv = futex_task_vector(nr_futexes);
+		if (!futexv)
+			futexv = kzalloc_objs(*futexv, nr_futexes);
 		if (!futexv) {
 			ret = -ENOMEM;
 			goto destroy_timer;
@@ -351,7 +353,7 @@ static noinline long futex_waitv_block(struct futex_waitv __user *waiters,
 	if (!ret)
 		ret = futex_wait_multiple(futexv, nr_futexes, timeout ? &to : NULL);
 
-	if (futexv != inline_futexv)
+	if (futexv != inline_futexv && futexv != task_vector)
 		kfree(futexv);
 
 destroy_timer:

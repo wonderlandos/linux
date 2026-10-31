@@ -82,6 +82,47 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 	      u32 __user *uaddr2, u32 val2, u32 val3);
 int futex_hash_prctl(unsigned long arg2, unsigned long arg3, unsigned long arg4);
 
+/* WolKernel spin policy, shared with ntsync. See kernel/futex/futex.h. */
+#define FUTEX_SPIN_SCORE_MAX	8U
+
+
+static inline unsigned int futex_spin_next(unsigned int score, bool woke)
+{
+	if (woke)
+		return score >= FUTEX_SPIN_SCORE_MAX ? FUTEX_SPIN_SCORE_MAX : score + 1;
+	return score / 2;
+}
+
+static inline u64 futex_prespin_budget(unsigned int spin_ns, unsigned int score,
+				       bool cpu_alone)
+{
+	return score && cpu_alone ? spin_ns : 0;
+}
+
+/*
+ * A sleep this short says a spin may catch the next wake, so it rearms a task
+ * that stopped spinning. It does not raise a score that is still spinning: a
+ * wait a little over the budget would then miss and burn the budget every time.
+ */
+static inline unsigned int futex_spin_slept(unsigned int score, u64 slept_ns,
+					    unsigned int spin_ns)
+{
+	return !score && slept_ns < 2ULL * spin_ns ? 1 : score;
+}
+
+/*
+ * Passes of a spin between two clock reads, for a pass over @nr words. In a
+ * guest a read costs more than polling one word, and a spin only needs the
+ * clock to give up, so it overruns its budget by at most these few passes. A
+ * pass over many words is long enough to carry a read.
+ */
+#define FUTEX_SPIN_POLLS	16U
+
+static inline unsigned int futex_spin_polls(unsigned int polls, unsigned int nr)
+{
+	return nr && polls > nr ? polls / nr : 1;
+}
+
 #ifdef CONFIG_FUTEX_PRIVATE_HASH
 int futex_hash_allocate_default(void);
 void futex_hash_free(struct mm_struct *mm);

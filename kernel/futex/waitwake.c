@@ -177,6 +177,8 @@ efault:
 	return false;
 }
 
+static void futex_wake_up_q(struct wake_q_head *wake_q, int woken);
+
 /*
  * Wake up waiters matching bitset queued on this futex (uaddr).
  */
@@ -227,7 +229,7 @@ int futex_wake(u32 __user *uaddr, unsigned int flags, void __user *pop, int nr_w
 	}
 
 	spin_unlock(&hb->lock);
-	wake_up_q(&wake_q);
+	futex_wake_up_q(&wake_q, ret);
 	return ret;
 }
 
@@ -403,10 +405,35 @@ bool futex_key_cache_on __read_mostly = true;
 module_param_named(key_cache, futex_key_cache_on, bool, 0644);
 EXPORT_SYMBOL_IF_KUNIT(futex_key_cache_on);
 
+static bool futex_sync_on __read_mostly = true;
+module_param_named(sync_wake, futex_sync_on, bool, 0644);
+
+static void futex_wake_up_q(struct wake_q_head *wake_q, int woken)
+{
+	bool sync = READ_ONCE(futex_sync_on), alone = single_task_running();
+
+	/* The gap is only asked about on a CPU a hand-over could help. */
+	current->futex.last_wake = sync && !alone && woken > 0 ? local_clock() : 0;
+	if (sync && futex_sync_wanted(woken, current->futex.sync_score, alone))
+		wake_up_q_sync(wake_q);
+	else
+		wake_up_q(wake_q);
+}
+
+/* Off: futex.spin_polls=1, a clock read every pass and at every sleep. */
+static unsigned int futex_spin_polls_max __read_mostly = FUTEX_SPIN_POLLS;
+module_param_named(spin_polls, futex_spin_polls_max, uint, 0644);
+
+struct futex_prespin {
+	u64		end;
+	unsigned int	polls;
+	unsigned int	left;
+};
+
 static bool futex_prespin_on __read_mostly = true;
 module_param_named(prespin, futex_prespin_on, bool, 0644);
 
-static bool futex_prespin_begin(u64 *end)
+static bool futex_prespin_begin(struct futex_prespin *s, unsigned int nr)
 {
 	u64 budget;
 
@@ -417,14 +444,20 @@ static bool futex_prespin_begin(u64 *end)
 				      single_task_running());
 	if (!budget)
 		return false;
-	*end = local_clock() + budget;
+	s->polls = futex_spin_polls(READ_ONCE(futex_spin_polls_max), nr);
+	s->left = s->polls;
+	s->end = local_clock() + budget;
 	return true;
 }
 
-static __always_inline bool futex_prespin_goes_on(u64 end)
+static __always_inline bool futex_prespin_goes_on(struct futex_prespin *s)
 {
-	return !need_resched() && !signal_pending(current) &&
-	       single_task_running() && local_clock() < end;
+	if (need_resched() || signal_pending(current) || !single_task_running())
+		return false;
+	if (--s->left)
+		return true;
+	s->left = s->polls;
+	return local_clock() < s->end;
 }
 
 static void futex_prespin_end(bool hit)
@@ -435,12 +468,12 @@ static void futex_prespin_end(bool hit)
 bool futex_waitv_prespin(const struct futex_waitv __user *uw, unsigned int nr,
 			 const struct __kernel_timespec __user *to)
 {
+	struct futex_prespin s;
 	int scan = FUTEX_SCAN_MATCH;
-	u64 end;
 
-	if (!futex_prespin_begin(&end))
+	if (!futex_prespin_begin(&s, nr))
 		return false;
-	while (scan == FUTEX_SCAN_MATCH && futex_prespin_goes_on(end)) {
+	while (scan == FUTEX_SCAN_MATCH && futex_prespin_goes_on(&s)) {
 		cpu_relax();
 		scan = futex_waitv_scan(uw, nr, to);
 	}
@@ -450,12 +483,12 @@ bool futex_waitv_prespin(const struct futex_waitv __user *uw, unsigned int nr,
 
 static bool futex_wait_prespin(u32 __user *uaddr, u32 val)
 {
+	struct futex_prespin s;
 	bool differs = false;
-	u64 end;
 
-	if (!futex_prespin_begin(&end))
+	if (!futex_prespin_begin(&s, 1))
 		return false;
-	while (!differs && futex_prespin_goes_on(end)) {
+	while (!differs && futex_prespin_goes_on(&s)) {
 		cpu_relax();
 		differs = futex_value_differs(uaddr, val);
 	}
@@ -463,13 +496,29 @@ static bool futex_wait_prespin(u32 __user *uaddr, u32 val)
 	return differs;
 }
 
-/* Every sleep teaches the score, or a task that sleeps never learns to spin. */
+/* The start of the sleep, or 0 when nothing will learn from it. */
+static __always_inline u64 futex_sleep_begin(void)
+{
+	u64 last = current->futex.last_wake, start;
+
+	if (READ_ONCE(futex_spin_polls_max) > 1 &&
+	    !futex_sleep_needs_clock(current->futex.spin_score, last))
+		return 0;
+	start = local_clock();
+	if (last) {
+		current->futex.sync_score =
+			futex_sync_next(current->futex.sync_score, start - last);
+		current->futex.last_wake = 0;
+	}
+	return start;
+}
+
+/* A sleep rearms a stopped spin, or a task that sleeps never learns to spin. */
 static void futex_sleep_learn(u64 start)
 {
-	if (READ_ONCE(futex_prespin_on))
+	if (start && !current->futex.spin_score && READ_ONCE(futex_prespin_on))
 		current->futex.spin_score =
-			futex_spin_slept(current->futex.spin_score,
-					 local_clock() - start,
+			futex_spin_slept(0, local_clock() - start,
 					 READ_ONCE(futex_spin_ns));
 }
 
@@ -527,7 +576,7 @@ void futex_do_wait(struct futex_q *q, struct hrtimer_sleeper *timeout)
 		if (!READ_ONCE(futex_prespin_on))
 			futex_spin_wait(q);
 		if (!timeout || hrtimer_sleeper_task_get(timeout)) {
-			u64 start = local_clock();
+			u64 start = futex_sleep_begin();
 
 			schedule();
 			futex_sleep_learn(start);
@@ -751,7 +800,7 @@ static void futex_sleep_multiple(struct futex_vector *vs, unsigned int count,
 			return;
 	}
 
-	start = local_clock();
+	start = futex_sleep_begin();
 	schedule();
 	futex_sleep_learn(start);
 }

@@ -305,6 +305,63 @@ static void key_cache_off(struct kunit *t)
 	KUNIT_EXPECT_EQ(t, current->futex.key_cache->hits, hits);
 }
 
+static void task_vector_reused(struct kunit *t)
+{
+	bool saved = futex_waitv_inline_on;
+	struct futex_vector *v = futex_task_vector(5);
+
+	KUNIT_ASSERT_NOT_NULL(t, v);
+	KUNIT_EXPECT_PTR_EQ(t, futex_task_vector(FUTEX_WAITV_TASK), v);
+	KUNIT_EXPECT_NULL(t, futex_task_vector(FUTEX_WAITV_TASK + 1));
+	futex_waitv_inline_on = false;	/* off: the plain allocation path */
+	KUNIT_EXPECT_NULL(t, futex_task_vector(5));
+	futex_waitv_inline_on = saved;
+}
+
+static void sync_score_moves(struct kunit *t)
+{
+	unsigned int s = 0;
+	int i;
+
+	for (i = 0; i < 20; i++)
+		s = futex_sync_next(s, 3000);	/* slept 3 us after a wake */
+	KUNIT_EXPECT_EQ(t, s, FUTEX_SYNC_SCORE_MAX);
+	/* one long gap demotes it, two more stop the hand-over */
+	s = futex_sync_next(s, FUTEX_SYNC_GAP_NS);
+	KUNIT_EXPECT_EQ(t, s, FUTEX_SYNC_SCORE_MAX / 2);
+	s = futex_sync_next(futex_sync_next(s, U64_MAX), U64_MAX);
+	KUNIT_EXPECT_LT(t, s, FUTEX_SYNC_MIN);
+	KUNIT_EXPECT_EQ(t, futex_sync_next(0, FUTEX_SYNC_GAP_NS - 1), 1U);
+}
+
+static void spin_polls_between_clock_reads(struct kunit *t)
+{
+	KUNIT_EXPECT_EQ(t, futex_spin_polls(16, 1), 16U);
+	/* a pass over many words is long enough to carry a clock read */
+	KUNIT_EXPECT_EQ(t, futex_spin_polls(16, 3), 5U);
+	KUNIT_EXPECT_EQ(t, futex_spin_polls(16, 16), 1U);
+	KUNIT_EXPECT_EQ(t, futex_spin_polls(16, 64), 1U);
+	/* spin_polls=1: a read every pass, the old loop */
+	KUNIT_EXPECT_EQ(t, futex_spin_polls(1, 1), 1U);
+	KUNIT_EXPECT_EQ(t, futex_spin_polls(0, 1), 1U);
+}
+
+static void sync_only_on_a_contended_cpu(struct kunit *t)
+{
+	KUNIT_EXPECT_TRUE(t, futex_sync_wanted(1, FUTEX_SYNC_MIN, false));
+	/* alone on the CPU the wakee would land on us and end both spins */
+	KUNIT_EXPECT_FALSE(t, futex_sync_wanted(1, FUTEX_SYNC_SCORE_MAX, true));
+	KUNIT_EXPECT_FALSE(t, futex_sync_wanted(2, FUTEX_SYNC_SCORE_MAX, false));
+	KUNIT_EXPECT_FALSE(t, futex_sync_wanted(1, FUTEX_SYNC_MIN - 1, false));
+}
+
+static void sleep_reads_the_clock_only_to_learn(struct kunit *t)
+{
+	KUNIT_EXPECT_TRUE(t, futex_sleep_needs_clock(0, 0));	/* may rearm the spin */
+	KUNIT_EXPECT_TRUE(t, futex_sleep_needs_clock(3, 12345));	/* gap since our wake */
+	KUNIT_EXPECT_FALSE(t, futex_sleep_needs_clock(3, 0));
+}
+
 static struct kunit_case futex_spin_cases[] = {
 	KUNIT_CASE(budget_off_cases),
 	KUNIT_CASE(budget_scales_with_score),
@@ -320,6 +377,11 @@ static struct kunit_case futex_spin_cases[] = {
 	KUNIT_CASE(key_cache_hits_until_mmap_moves),
 	KUNIT_CASE(key_cache_only_plain_reads),
 	KUNIT_CASE(key_cache_off),
+	KUNIT_CASE(task_vector_reused),
+	KUNIT_CASE(sync_score_moves),
+	KUNIT_CASE(spin_polls_between_clock_reads),
+	KUNIT_CASE(sync_only_on_a_contended_cpu),
+	KUNIT_CASE(sleep_reads_the_clock_only_to_learn),
 	{}
 };
 

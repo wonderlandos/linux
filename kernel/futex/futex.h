@@ -162,8 +162,6 @@ struct futex_hash_bucket {
  * buckets with long waits stop wasting CPU and quick hand-offs keep spinning.
  * Pure functions so KUnit can check them (spin_kunit.c).
  */
-#define FUTEX_SPIN_SCORE_MAX	8U
-
 static inline u64 futex_spin_budget(unsigned int spin_ns, unsigned int score,
 				    bool cpu_alone)
 {
@@ -172,13 +170,6 @@ static inline u64 futex_spin_budget(unsigned int spin_ns, unsigned int score,
 	if (score > FUTEX_SPIN_SCORE_MAX)
 		score = FUTEX_SPIN_SCORE_MAX;
 	return (u64)spin_ns * score / FUTEX_SPIN_SCORE_MAX;
-}
-
-static inline unsigned int futex_spin_next(unsigned int score, bool woke)
-{
-	if (woke)
-		return score >= FUTEX_SPIN_SCORE_MAX ? FUTEX_SPIN_SCORE_MAX : score + 1;
-	return score / 2;
 }
 
 /*
@@ -192,21 +183,33 @@ static inline unsigned int futex_spin_next(unsigned int score, bool woke)
  * can never reach a partner that is itself asleep, and both sides stay stuck
  * in the slow regime. Misses halve the score. Pure policy, see spin_kunit.c.
  */
-static inline u64 futex_prespin_budget(unsigned int spin_ns, unsigned int score,
-				       bool cpu_alone)
+/*
+ * WolKernel request/reply: a task that wakes one waiter and sleeps right after
+ * hands its CPU over. The score counts that pattern; from FUTEX_SYNC_MIN on its
+ * single wakes run the wakee here, without an IPI, once the waker blocks. Only
+ * on a CPU something else wants: on a free one the pair belongs on two CPUs,
+ * where they spin, and a hand-over would put them on one for good.
+ */
+#define FUTEX_SYNC_SCORE_MAX	8U
+#define FUTEX_SYNC_MIN		2U
+#define FUTEX_SYNC_GAP_NS	20000ULL
+
+static inline unsigned int futex_sync_next(unsigned int score, u64 gap_ns)
 {
-	return score && cpu_alone ? spin_ns : 0;
+	if (gap_ns >= FUTEX_SYNC_GAP_NS)
+		return score / 2;
+	return score < FUTEX_SYNC_SCORE_MAX ? score + 1 : score;
 }
 
-/*
- * A sleep this short says a spin may catch the next wake, so it rearms a task
- * that stopped spinning. It does not raise a score that is still spinning: a
- * wait a little over the budget would then miss and burn the budget every time.
- */
-static inline unsigned int futex_spin_slept(unsigned int score, u64 slept_ns,
-					    unsigned int spin_ns)
+static inline bool futex_sync_wanted(int woken, unsigned int score, bool cpu_alone)
 {
-	return !score && slept_ns < 2ULL * spin_ns ? 1 : score;
+	return woken == 1 && score >= FUTEX_SYNC_MIN && !cpu_alone;
+}
+
+/* Only two things learn from a sleep: a stopped spin, and the gap since a wake. */
+static inline bool futex_sleep_needs_clock(unsigned int spin_score, u64 last_wake)
+{
+	return !spin_score || last_wake;
 }
 
 /*
@@ -542,6 +545,14 @@ static inline bool futex_waitv_inline(unsigned int nr)
 {
 	return READ_ONCE(futex_waitv_inline_on) && nr <= FUTEX_WAITV_INLINE;
 }
+
+/*
+ * WolKernel: past the stack vector, up to FUTEX_WAITV_TASK futexes use a vector
+ * the task keeps, instead of a zeroed allocation per call. A task sleeps in one
+ * futex_waitv() at a time. NULL means the caller allocates as before.
+ */
+#define FUTEX_WAITV_TASK	64
+extern struct futex_vector *futex_task_vector(unsigned int nr);
 
 extern bool futex_precheck_on;
 

@@ -795,6 +795,18 @@ int futex_key_get(u32 __user *uaddr, unsigned int flags, union futex_key *key,
 }
 EXPORT_SYMBOL_IF_KUNIT(futex_key_get);
 
+struct futex_vector *futex_task_vector(unsigned int nr)
+{
+	struct futex_vector **v = &current->futex.vector;
+
+	if (nr > FUTEX_WAITV_TASK || !READ_ONCE(futex_waitv_inline_on))
+		return NULL;
+	if (unlikely(!*v))
+		*v = kmalloc_objs(**v, FUTEX_WAITV_TASK, GFP_KERNEL | __GFP_NOWARN);
+	return *v;
+}
+EXPORT_SYMBOL_IF_KUNIT(futex_task_vector);
+
 /**
  * fault_in_user_writeable() - Fault in user address and verify RW access
  * @uaddr:	pointer to faulting user space address
@@ -1632,6 +1644,8 @@ void futex_exit_exec_release(struct task_struct *tsk)
 	futex_cleanup_end(tsk);
 	kfree(tsk->futex.key_cache);
 	tsk->futex.key_cache = NULL;
+	kfree(tsk->futex.vector);
+	tsk->futex.vector = NULL;
 }
 
 /*

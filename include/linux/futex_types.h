@@ -21,6 +21,9 @@ struct robust_list_head;
  * @state:		Futex handling state to handle exit races correctly
  * @spin_score:		WolKernel pre-queue spin score, see futex_prespin_budget()
  * @key_cache:		WolKernel shared key cache, allocated on first use
+ * @vector:		WolKernel futex_waitv vector, allocated on first use
+ * @last_wake:		WolKernel local_clock() of this task's last futex wake
+ * @sync_score:		WolKernel request/reply score, see futex_sync_next()
  */
 struct futex_sched_data {
 	struct robust_list_head __user		*robust_list;
@@ -33,6 +36,9 @@ struct futex_sched_data {
 	unsigned int				state;
 	unsigned int				spin_score;
 	struct futex_key_cache			*key_cache;
+	struct futex_vector			*vector;
+	u64					last_wake;
+	unsigned int				sync_score;
 };
 
 #ifdef CONFIG_FUTEX_PRIVATE_HASH
