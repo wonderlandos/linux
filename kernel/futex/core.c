@@ -35,6 +35,7 @@
 #include <linux/debugfs.h>
 #include <linux/fault-inject.h>
 #include <linux/gfp.h>
+#include <linux/hash.h>
 #include <linux/jhash.h>
 #include <linux/memblock.h>
 #include <linux/mempolicy.h>
@@ -47,6 +48,7 @@
 #include <linux/vmalloc.h>
 #include <linux/kmemleak.h>
 #include <linux/wait_bit.h>
+#include <kunit/visibility.h>
 
 #include <vdso/futex.h>
 
@@ -734,6 +736,64 @@ out:
 	folio_put(folio);
 	return err;
 }
+
+/**
+ * futex_key_get - get_futex_key() through the per-task shared key cache
+ * @uaddr:	virtual address of the futex
+ * @flags:	FLAGS_*
+ * @key:	address where result is stored
+ * @rw:		mapping needs to be read/write
+ *
+ * See struct futex_key_cache. Anything but a plain aligned shared u32 read
+ * takes get_futex_key(), and so does a task with no cache to spare: the cache
+ * never changes an answer, it only skips a lookup. futex.state keeps exit and
+ * the exec window, when current->mm is about to change, out of it.
+ *
+ * Return: as get_futex_key()
+ */
+int futex_key_get(u32 __user *uaddr, unsigned int flags, union futex_key *key,
+		  enum futex_access rw)
+{
+	const unsigned int mask = FLAGS_SHARED | FLAGS_SIZE_MASK | FLAGS_NUMA | FLAGS_MPOL;
+	struct futex_key_cache *c = current->futex.key_cache;
+	unsigned long tag = (unsigned long)uaddr | 1;
+	struct mm_struct *mm = current->mm;
+	unsigned int seq, i;
+	int ret;
+
+	if (rw != FUTEX_READ || (flags & mask) != (FLAGS_SHARED | FLAGS_SIZE_32) ||
+	    !IS_ALIGNED((unsigned long)uaddr, sizeof(u32)) ||
+	    !READ_ONCE(futex_key_cache_on) || !mm ||
+	    current->futex.state != FUTEX_STATE_OK ||
+	    !mmap_lock_speculate_try_begin(mm, &seq))
+		return get_futex_key(uaddr, flags, key, rw);
+
+	if (unlikely(!c)) {
+		c = kzalloc_obj(*c);
+		if (!c)
+			return get_futex_key(uaddr, flags, key, rw);
+		c->seq = seq;
+		current->futex.key_cache = c;
+	} else if (c->seq != seq) {
+		memset(c->slot, 0, sizeof(c->slot));
+		c->seq = seq;
+	}
+
+	i = hash_32((u32)((unsigned long)uaddr >> 2), ilog2(FUTEX_KEY_CACHE_SLOTS));
+	if (c->slot[i].uaddr == tag) {
+		*key = c->slot[i].key;
+		c->hits++;
+		return 0;
+	}
+
+	ret = get_futex_key(uaddr, flags, key, rw);
+	if (!ret) {
+		c->slot[i].uaddr = tag;
+		c->slot[i].key = *key;
+	}
+	return ret;
+}
+EXPORT_SYMBOL_IF_KUNIT(futex_key_get);
 
 /**
  * fault_in_user_writeable() - Fault in user address and verify RW access
@@ -1570,6 +1630,8 @@ void futex_exit_exec_release(struct task_struct *tsk)
 	futex_cleanup_begin(tsk);
 	futex_cleanup(tsk);
 	futex_cleanup_end(tsk);
+	kfree(tsk->futex.key_cache);
+	tsk->futex.key_cache = NULL;
 }
 
 /*

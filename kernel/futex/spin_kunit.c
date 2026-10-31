@@ -231,6 +231,80 @@ static void waitv_scan_timeout(struct kunit *t)
 			FUTEX_SCAN_FULL);
 }
 
+#define SHARED32	(FLAGS_SHARED | FLAGS_SIZE_32)
+
+static u32 __user *shared_word(struct kunit *t)
+{
+	unsigned long a = kunit_vm_mmap(t, NULL, 0, PAGE_SIZE, PROT_READ | PROT_WRITE,
+					MAP_ANONYMOUS | MAP_SHARED, 0);
+	u32 zero = 0;
+
+	KUNIT_ASSERT_NE(t, a, 0UL);
+	KUNIT_ASSERT_EQ(t, copy_to_user((void __user *)a, &zero, sizeof(zero)), 0UL);
+	return (u32 __user *)a;
+}
+
+static void key_cache_hits_until_mmap_moves(struct kunit *t)
+{
+	union futex_key k1 = FUTEX_KEY_INIT, k2 = FUTEX_KEY_INIT;
+	u32 __user *u = shared_word(t);
+	struct futex_key_cache *c;
+	unsigned int hits;
+
+	KUNIT_ASSERT_EQ(t, futex_key_get(u, SHARED32, &k1, FUTEX_READ), 0);
+	c = current->futex.key_cache;
+	KUNIT_ASSERT_NOT_NULL(t, c);
+	hits = c->hits;
+	KUNIT_ASSERT_EQ(t, futex_key_get(u, SHARED32, &k2, FUTEX_READ), 0);
+	KUNIT_EXPECT_EQ(t, c->hits, hits + 1);
+	KUNIT_EXPECT_TRUE(t, futex_match(&k1, &k2));
+	/* same key as the uncached path gives */
+	KUNIT_ASSERT_EQ(t, get_futex_key(u, SHARED32, &k2, FUTEX_READ), 0);
+	KUNIT_EXPECT_TRUE(t, futex_match(&k1, &k2));
+
+	/* any mmap_lock writer empties it */
+	KUNIT_ASSERT_NE(t, (unsigned long)shared_word(t), 0UL);
+	hits = c->hits;
+	KUNIT_ASSERT_EQ(t, futex_key_get(u, SHARED32, &k2, FUTEX_READ), 0);
+	KUNIT_EXPECT_EQ(t, c->hits, hits);
+}
+
+static void key_cache_only_plain_reads(struct kunit *t)
+{
+	union futex_key k = FUTEX_KEY_INIT;
+	u32 __user *u = shared_word(t);
+	struct futex_key_cache *c;
+	unsigned int hits;
+
+	KUNIT_ASSERT_EQ(t, futex_key_get(u, SHARED32, &k, FUTEX_READ), 0);
+	KUNIT_ASSERT_EQ(t, futex_key_get(u, SHARED32, &k, FUTEX_READ), 0);
+	c = current->futex.key_cache;
+	KUNIT_ASSERT_NOT_NULL(t, c);
+	hits = c->hits;
+	/* writers, private and misaligned words go down the plain path */
+	KUNIT_EXPECT_EQ(t, futex_key_get(u, SHARED32, &k, FUTEX_WRITE), 0);
+	KUNIT_EXPECT_EQ(t, futex_key_get(u, FLAGS_SIZE_32, &k, FUTEX_READ), 0);
+	KUNIT_EXPECT_EQ(t, futex_key_get((void __user *)u + 1, SHARED32, &k, FUTEX_READ),
+			-EINVAL);
+	KUNIT_EXPECT_EQ(t, c->hits, hits);
+}
+
+static void key_cache_off(struct kunit *t)
+{
+	union futex_key k = FUTEX_KEY_INIT;
+	u32 __user *u = shared_word(t);
+	bool saved = futex_key_cache_on;
+	unsigned int hits;
+
+	KUNIT_ASSERT_EQ(t, futex_key_get(u, SHARED32, &k, FUTEX_READ), 0);
+	KUNIT_ASSERT_NOT_NULL(t, current->futex.key_cache);
+	hits = current->futex.key_cache->hits;
+	futex_key_cache_on = false;
+	KUNIT_EXPECT_EQ(t, futex_key_get(u, SHARED32, &k, FUTEX_READ), 0);
+	futex_key_cache_on = saved;
+	KUNIT_EXPECT_EQ(t, current->futex.key_cache->hits, hits);
+}
+
 static struct kunit_case futex_spin_cases[] = {
 	KUNIT_CASE(budget_off_cases),
 	KUNIT_CASE(budget_scales_with_score),
@@ -243,6 +317,9 @@ static struct kunit_case futex_spin_cases[] = {
 	KUNIT_CASE(waitv_scan_array_fault),
 	KUNIT_CASE(waitv_scan_every_index),
 	KUNIT_CASE(waitv_scan_timeout),
+	KUNIT_CASE(key_cache_hits_until_mmap_moves),
+	KUNIT_CASE(key_cache_only_plain_reads),
+	KUNIT_CASE(key_cache_off),
 	{}
 };
 

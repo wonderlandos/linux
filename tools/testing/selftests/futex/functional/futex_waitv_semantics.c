@@ -225,6 +225,53 @@ TEST(untouched_pages)
 	close(fd);
 }
 
+/* The same address, remapped to another object between two waits, is another futex. */
+static uint32_t *remap_addr;
+static atomic_int remap_phase;
+
+static void *remap_waiter(void *p)
+{
+	struct futex_waitv w[1];
+	struct timespec t;
+	int *ret = p;
+
+	set(w, remap_addr, 0, F32);
+	t = in_ms(1);
+	wv(w, 1, 0, &t, CLOCK_MONOTONIC);	/* key of the first object */
+	atomic_store(&remap_phase, 1);
+	while (atomic_load(&remap_phase) != 2)
+		usleep(50);
+	t = in_ms(3000);
+	*ret = wv(w, 1, 0, &t, CLOCK_MONOTONIC);
+	return NULL;
+}
+
+TEST(remap_between_waits)
+{
+	long pg = sysconf(_SC_PAGESIZE);
+	int a = memfd_create("fxa", 0), b = memfd_create("fxb", 0), ret = 1, tries = 0;
+	uint32_t *other;
+	pthread_t th;
+
+	ASSERT_EQ(0, ftruncate(a, pg));
+	ASSERT_EQ(0, ftruncate(b, pg));
+	remap_addr = mmap(NULL, pg, PROT_READ | PROT_WRITE, MAP_SHARED, a, 0);
+	other = mmap(NULL, pg, PROT_READ | PROT_WRITE, MAP_SHARED, b, 0);
+	ASSERT_NE(MAP_FAILED, remap_addr);
+	ASSERT_NE(MAP_FAILED, other);
+	ASSERT_EQ(0, pthread_create(&th, NULL, remap_waiter, &ret));
+	while (atomic_load(&remap_phase) != 1)
+		usleep(50);
+	ASSERT_EQ(remap_addr, mmap(remap_addr, pg, PROT_READ | PROT_WRITE,
+				   MAP_SHARED | MAP_FIXED, b, 0));
+	atomic_store(&remap_phase, 2);
+	/* no value change: only a queue on the right key can see this wake */
+	while (fwake(other, 1, 0) != 1 && tries++ < 40000)
+		usleep(100);
+	pthread_join(th, NULL);
+	EXPECT_EQ(0, ret);
+}
+
 /* --- the woken index --- */
 #define MAXV 128
 static _Atomic uint32_t many[MAXV * 16];

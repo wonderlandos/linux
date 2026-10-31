@@ -190,7 +190,7 @@ int futex_wake(u32 __user *uaddr, unsigned int flags, void __user *pop, int nr_w
 	if (!bitset)
 		return -EINVAL;
 
-	ret = get_futex_key(uaddr, flags, &key, FUTEX_READ);
+	ret = futex_key_get(uaddr, flags, &key, FUTEX_READ);
 	if (unlikely(ret != 0))
 		return ret;
 
@@ -399,6 +399,10 @@ bool futex_precheck_on __read_mostly = true;
 module_param_named(precheck, futex_precheck_on, bool, 0644);
 EXPORT_SYMBOL_IF_KUNIT(futex_precheck_on);
 
+bool futex_key_cache_on __read_mostly = true;
+module_param_named(key_cache, futex_key_cache_on, bool, 0644);
+EXPORT_SYMBOL_IF_KUNIT(futex_key_cache_on);
+
 static bool futex_prespin_on __read_mostly = true;
 module_param_named(prespin, futex_prespin_on, bool, 0644);
 
@@ -603,7 +607,7 @@ retry:
 		if (!(vs[i].w.flags & FLAGS_SHARED) && retry)
 			continue;
 
-		ret = get_futex_key(u64_to_user_ptr(vs[i].w.uaddr),
+		ret = futex_key_get(u64_to_user_ptr(vs[i].w.uaddr),
 				    vs[i].w.flags,
 				    &vs[i].q.key, FUTEX_READ);
 
@@ -847,7 +851,7 @@ int futex_wait_setup(u32 __user *uaddr, u32 val, unsigned int flags,
 	 * while the syscall executes.
 	 */
 retry:
-	ret = get_futex_key(uaddr, flags, &q->key, FUTEX_READ);
+	ret = futex_key_get(uaddr, flags, &q->key, FUTEX_READ);
 	if (unlikely(ret != 0))
 		return ret;
 

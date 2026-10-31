@@ -288,10 +288,32 @@ enum futex_access {
 
 extern int get_futex_key(u32 __user *uaddr, unsigned int flags, union futex_key *key,
 			 enum futex_access rw);
+extern bool futex_key_cache_on;
+extern int futex_key_get(u32 __user *uaddr, unsigned int flags, union futex_key *key,
+			 enum futex_access rw);
 extern void futex_q_lockptr_lock(struct futex_q *q) __acquires(q->lock_ptr);
 extern struct hrtimer_sleeper *
 futex_setup_timer(ktime_t *time, struct hrtimer_sleeper *timeout,
 		  int flags, u64 range_ns);
+
+/*
+ * WolKernel: a shared futex key costs a GUP-fast and a folio lookup per
+ * address, and Proton's fsync futexes are all shared. The key of an address
+ * only changes with its VMA or with a read-only private page, which only
+ * mprotect() makes writable, so it holds while the mm's mmap_lock sequence
+ * stands still. Each task keeps its last keys, direct-mapped, emptied when
+ * the sequence moves. Off: futex.key_cache=0.
+ */
+#define FUTEX_KEY_CACHE_SLOTS	16
+
+struct futex_key_cache {
+	unsigned int seq;
+	unsigned int hits;	/* read by KUnit */
+	struct {
+		unsigned long uaddr;
+		union futex_key key;
+	} slot[FUTEX_KEY_CACHE_SLOTS];
+};
 
 struct futex_bucket_ref {
 	struct futex_hash_bucket *hb;

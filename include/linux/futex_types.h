@@ -20,6 +20,7 @@ struct robust_list_head;
  * @exit_mutex:		Mutex for serializing exit
  * @state:		Futex handling state to handle exit races correctly
  * @spin_score:		WolKernel pre-queue spin score, see futex_prespin_budget()
+ * @key_cache:		WolKernel shared key cache, allocated on first use
  */
 struct futex_sched_data {
 	struct robust_list_head __user		*robust_list;
@@ -31,6 +32,7 @@ struct futex_sched_data {
 	struct mutex				exit_mutex;
 	unsigned int				state;
 	unsigned int				spin_score;
+	struct futex_key_cache			*key_cache;
 };
 
 #ifdef CONFIG_FUTEX_PRIVATE_HASH
