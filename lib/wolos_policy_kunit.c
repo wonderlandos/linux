@@ -122,6 +122,21 @@ static void xhci_imod(struct kunit *t)
 	KUNIT_EXPECT_EQ(t, wolos_xhci_imod_ns(10000, 40000), 10000U);
 }
 
+static void psi_skip_record(struct kunit *t)
+{
+	KUNIT_EXPECT_TRUE(t, wolos_psi_skip_record(5, 5, 1000, true));
+	KUNIT_EXPECT_FALSE(t, wolos_psi_skip_record(5, 4, 1000, true));
+	KUNIT_EXPECT_FALSE(t, wolos_psi_skip_record(5, 5, 1000000000LL, true));
+	KUNIT_EXPECT_FALSE(t, wolos_psi_skip_record(5, 5, 1000, false));
+}
+
+static void psi_irq_defer(struct kunit *t)
+{
+	KUNIT_EXPECT_TRUE(t, wolos_psi_irq_defer(9999, 10000));
+	KUNIT_EXPECT_FALSE(t, wolos_psi_irq_defer(10000, 10000));
+	KUNIT_EXPECT_FALSE(t, wolos_psi_irq_defer(1, 0));
+}
+
 static struct kunit_case wolos_policy_cases[] = {
 	KUNIT_CASE(sock_busy),
 	KUNIT_CASE(xhci_imod),
@@ -129,6 +144,8 @@ static struct kunit_case wolos_policy_cases[] = {
 	KUNIT_CASE(shield_cpu),
 	KUNIT_CASE(shield_limits),
 	KUNIT_CASE(input_boost),
+	KUNIT_CASE(psi_skip_record),
+	KUNIT_CASE(psi_irq_defer),
 	KUNIT_CASE(tsc_trust),
 	KUNIT_CASE(kbd_bypass),
 	KUNIT_CASE(oom_bias),

@@ -161,6 +161,9 @@ struct psi_group {
 	struct psi_group *parent;
 	bool enabled;
 
+	/* No reader yet: tasks[] stay exact, states and averages wait (wolos_sched.psi_lazy). */
+	bool dormant;
+
 	/* Protects data used by the aggregator */
 	struct mutex avgs_lock;
 

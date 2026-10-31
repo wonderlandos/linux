@@ -136,6 +136,7 @@
  * cost-wise, yet way more sensitive and accurate than periodic
  * sampling of the aggregate task states would be.
  */
+#include <linux/wolos_policy.h>
 #include <linux/sched/clock.h>
 #include <linux/workqueue.h>
 #include <linux/psi.h>
@@ -145,6 +146,25 @@ static int psi_bug __read_mostly;
 
 DEFINE_STATIC_KEY_FALSE(psi_disabled);
 static DEFINE_STATIC_KEY_TRUE(psi_cgroups_enabled);
+
+/*
+ * wolos_sched.psi_lazy: a new cgroup starts dormant, its states and averages
+ * begin at the first read or trigger of a pressure file. psi_lean skips the
+ * time flush of a group whose state did not change. psi_irq_batch_ns holds
+ * smaller IRQ time for the next switch. 0 turns each off.
+ */
+static bool wolos_psi_lazy = IS_ENABLED(CONFIG_WOLOS_HINTS);
+static bool wolos_psi_lean = IS_ENABLED(CONFIG_WOLOS_HINTS);
+static unsigned int wolos_psi_irq_batch_ns = IS_ENABLED(CONFIG_WOLOS_HINTS) ? 10000 : 0;
+#ifdef CONFIG_WOLOS_HINTS
+#undef MODULE_PARAM_PREFIX
+#define MODULE_PARAM_PREFIX "wolos_sched."
+module_param_named(psi_lazy, wolos_psi_lazy, bool, 0644);
+module_param_named(psi_lean, wolos_psi_lean, bool, 0644);
+module_param_named(psi_irq_batch_ns, wolos_psi_irq_batch_ns, uint, 0644);
+#undef MODULE_PARAM_PREFIX
+#define MODULE_PARAM_PREFIX
+#endif
 
 #ifdef CONFIG_PSI_DEFAULT_DISABLED
 static bool psi_enable;
@@ -837,7 +857,7 @@ static void psi_group_change(struct psi_group *group, int cpu,
 		if (set & (1 << t))
 			groupc->tasks[t]++;
 
-	if (!group->enabled) {
+	if (!group->enabled || READ_ONCE(group->dormant)) {
 		/*
 		 * On the first group change after disabling PSI, conclude
 		 * the current state and flush its time. This is unlikely
@@ -866,9 +886,12 @@ static void psi_group_change(struct psi_group *group, int cpu,
 	if (unlikely((state_mask & PSI_ONCPU) && cpu_curr(cpu)->in_memstall))
 		state_mask |= (1 << PSI_MEM_FULL);
 
-	record_times(groupc, now);
-
-	groupc->state_mask = state_mask;
+	if (!wolos_psi_skip_record(groupc->state_mask, state_mask,
+				   (s64)(now - groupc->state_start),
+				   READ_ONCE(wolos_psi_lean))) {
+		record_times(groupc, now);
+		groupc->state_mask = state_mask;
+	}
 
 	if (state_mask & group->rtpoll_states)
 		psi_schedule_rtpoll_work(group, 1, false);
@@ -1018,7 +1041,7 @@ void psi_account_irqtime(struct rq *rq, struct task_struct *curr, struct task_st
 
 	irq = irq_time_read(cpu);
 	delta = (s64)(irq - rq->psi_irq_time);
-	if (delta <= 0)
+	if (delta <= 0 || wolos_psi_irq_defer(delta, READ_ONCE(wolos_psi_irq_batch_ns)))
 		return;
 	rq->psi_irq_time = irq;
 
@@ -1120,6 +1143,7 @@ int psi_cgroup_alloc(struct cgroup *cgroup)
 	}
 	group_init(cgroup->psi);
 	cgroup->psi->parent = cgroup_psi(cgroup_parent(cgroup));
+	cgroup->psi->dormant = READ_ONCE(wolos_psi_lazy);
 	return 0;
 }
 
@@ -1243,6 +1267,15 @@ void psi_cgroup_restart(struct psi_group *group)
 }
 #endif /* CONFIG_CGROUPS */
 
+/* First reader: start the states and averages of a dormant group. */
+static void psi_wake_dormant(struct psi_group *group)
+{
+#ifdef CONFIG_CGROUPS
+	if (unlikely(READ_ONCE(group->dormant)) && xchg(&group->dormant, false))
+		psi_cgroup_restart(group);
+#endif
+}
+
 int psi_show(struct seq_file *m, struct psi_group *group, enum psi_res res)
 {
 	bool only_full = false;
@@ -1256,6 +1289,8 @@ int psi_show(struct seq_file *m, struct psi_group *group, enum psi_res res)
 	if (!irqtime_enabled() && res == PSI_IRQ)
 		return -EOPNOTSUPP;
 #endif
+
+	psi_wake_dormant(group);
 
 	/* Update averages before reporting them */
 	mutex_lock(&group->avgs_lock);
@@ -1342,6 +1377,8 @@ struct psi_trigger *psi_trigger_create(struct psi_group *group, char *buf,
 
 	if (static_branch_likely(&psi_disabled))
 		return ERR_PTR(-EOPNOTSUPP);
+
+	psi_wake_dormant(group);
 
 	/*
 	 * Checking the privilege here on file->f_cred implies that a privileged user

@@ -151,6 +151,22 @@ static inline unsigned int wolos_sock_busy_us(unsigned int sys_us, unsigned int 
 	return sys_us;
 }
 
+/*
+ * PSI: a group whose state did not change keeps running its clock. The reader
+ * adds now - state_start for live states, so skipping the flush loses nothing.
+ * The age bound keeps the u32 delta in record_times() from wrapping.
+ */
+static inline bool wolos_psi_skip_record(u32 old_mask, u32 new_mask, s64 age_ns, bool lean)
+{
+	return lean && old_mask == new_mask && age_ns < 1000000000LL;
+}
+
+/* PSI: small IRQ time waits for the next switch; rq->psi_irq_time keeps it. */
+static inline bool wolos_psi_irq_defer(s64 delta_ns, u32 batch_ns)
+{
+	return delta_ns < (s64)batch_ns;
+}
+
 /* xHCI interrupt moderation: the module parameter when set, else the driver default. */
 static inline u32 wolos_xhci_imod_ns(int param_ns, u32 dflt_ns)
 {
