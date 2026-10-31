@@ -17,7 +17,18 @@ static void gen(int kind,size_t n){
     case 3: in[i]="the quick brown fox jumps over the lazy dog "[i%44]; break;
     default: in[i]=(i*i>>3)&0xff; }
 }
-int main(void){ int bad=0, ok=0, refused=0; static const unsigned algos[]={3,7,11};
+static int fuzz(long iters){ static const unsigned algos[]={3,7,11}; long ok=0, refused=0;
+ for(long it=0; it<iters; it++){ unsigned a=algos[rnd()%3]; size_t n=1+rnd()%65536, ol=0, bl=0; int kind=rnd()%5; gen(kind,n);
+  /* perturb: a few random byte runs, so matches of every length and distance show up */
+  for(int m=rnd()%6;m>0;m--){ size_t at=rnd()%n, len=1+rnd()%64; for(size_t i=0;i<len&&at+i<n;i++) in[at+i]=rnd(); }
+  size_t cap=1+rnd()%8000;
+  int r=apfs_compress_encode_block(a,in,n,out,cap,&ol);
+  if(r==-ENOSPC){ refused++; continue; }
+  if(r||ol>cap){ printf("fuzz: encode error %d (algo %u n %zu cap %zu out %zu)\n",r,a,n,cap,ol); return 1; }
+  if(apfs_decompress_block(a,out,ol,back,sizeof back,n,&bl)||bl!=n||memcmp(back,in,n)){ printf("fuzz: ROUNDTRIP FAIL algo %u n %zu\n",a,n); return 1; }
+  ok++; }
+ printf("encode fuzz: %ld round trips ok, %ld refused\n",ok,refused); return 0; }
+int main(int argc,char**argv){ if(argc>1) return fuzz(atol(argv[1])); int bad=0, ok=0, refused=0; static const unsigned algos[]={3,7,11};
  size_t sizes[]={1,2,15,64,100,500,1000,2000,4095,4096,4097,8000,20000,65536};
  for(int a=0;a<3;a++) for(int k=0;k<5;k++) for(unsigned z=0;z<sizeof sizes/sizeof *sizes;z++){
    size_t n=sizes[z], ol=0, bl=0; gen(k,n);

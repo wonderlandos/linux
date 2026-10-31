@@ -33,7 +33,8 @@ check: vec enc
 	mkdir -p encout && cd encout && ASAN_OPTIONS=detect_leaks=0 ../enc  # the userspace zlib shim drops the kernel workspace pointer
 enc: enc.c $(B)/stamp
 	$(CC) $(CF) -o $@ enc.c $(SRC) $(ESRC) -lz
-fuzz-run: fuzz
+fuzz-run: fuzz enc
+	ASAN_OPTIONS=detect_leaks=0 ./enc $(N)
 	./fuzz $(N) 1 $(SEEDS)
 clean:
 	rm -rf vec fuzz enc encout build
