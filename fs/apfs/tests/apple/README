@@ -1,0 +1,15 @@
+Apple-made sample: macOS 11.0.1 (20B29) restore image, from Apple's public catalog (api.ipsw.me lists the URL).
+URL: https://updates.cdn-apple.com/2020FallFCS/fullrestores/001-79706/93A4C43C-2B45-47AF-84EA-794F8886B85C/UniversalMac_11.0.1_20B29_Restore.ipsw
+Member 022-10604-034.dmg (BaseSystem, UDIF, plain): sha256 87abe52619dfb7977b8fd9721568a51d6cfca776ff0cf508892543d8d540483c
+Raw APFS partition rebuilt with udif2raw.py (base.raw): sha256 3b90716096808afddcdbfb8e617ed5ac6ff1ab982c0221419bc861e92321d429
+Nothing from the image is committed; the tools below read it and skip when it is absent.
+  udif2raw.py   in.dmg out.raw          rebuild the APFS partition from a UDIF dmg
+  apfsdump.py   base.raw                independent read-only inspector: compressed inodes, decmpfs header, flags, xfields
+  rsrc.py       base.raw [blocks.out]   resource-fork layout facts; optionally export every block for applevec
+  applevec.c    blocks.out              decode each exported block with the module's decoders (build like tests/enc.c)
+Facts found in this image (30231 compressed inodes, sealed volume, case-insensitive): signature "fpmc" (0x636d7066);
+decmpfs xattr is embedded (flags 2); no dstream xfield and no extents; inode has HAS_UNCOMPRESSED_SIZE with size equal to
+the decmpfs size, and NO_RSRC_FORK for inline files or HAS_RSRC_FORK for resource ones; types seen: 8 (25500) and 9 (4731).
+Type 8 resource fork: u32 little endian offset table (blocks+1 entries), blocks back to back, last offset = fork size,
+blocks = ceil(size/64K); the fork is always a stream xattr, even when small. Sealed volumes keep file extents in the fext tree
+and hashed index nodes hold child = value + root oid.
