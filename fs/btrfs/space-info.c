@@ -2,6 +2,7 @@
 
 #include <linux/spinlock.h>
 #include <linux/minmax.h>
+#include <linux/moduleparam.h>
 #include "misc.h"
 #include "ctree.h"
 #include "space-info.h"
@@ -16,6 +17,15 @@
 #include "extent-tree.h"
 #include "zoned.h"
 #include "delayed-inode.h"
+
+/*
+ * Move data out of partly used block groups when unallocated space runs low,
+ * so that metadata can still get a chunk. Applies to filesystems mounted after
+ * the change; sysfs still overrides it per filesystem.
+ */
+static bool btrfs_auto_reclaim = true;
+module_param_named(auto_reclaim, btrfs_auto_reclaim, bool, 0644);
+MODULE_PARM_DESC(auto_reclaim, "Enable dynamic periodic reclaim of data block groups at mount");
 
 /*
  * HOW DOES SPACE RESERVATION WORK
@@ -264,6 +274,10 @@ static void init_space_info(struct btrfs_fs_info *info,
 
 	if (btrfs_is_zoned(info))
 		space_info->bg_reclaim_threshold = BTRFS_DEFAULT_ZONED_RECLAIM_THRESH;
+	else if (btrfs_auto_reclaim && flags == BTRFS_BLOCK_GROUP_DATA) {
+		space_info->dynamic_reclaim = true;
+		space_info->periodic_reclaim = true;
+	}
 }
 
 static int create_space_info_sub_group(struct btrfs_space_info *parent, u64 flags,
@@ -2182,10 +2196,14 @@ void btrfs_space_info_update_reclaimable(struct btrfs_space_info *space_info, s6
 	u64 chunk_sz = calc_effective_data_chunk_size(space_info->fs_info);
 
 	lockdep_assert_held(&space_info->lock);
-	space_info->reclaimable_bytes += bytes;
+	/*
+	 * Only what was freed since the fs last stopped growing counts. Letting
+	 * allocations drive this below zero means a full fs would have to free
+	 * everything it ever wrote before reclaim could start.
+	 */
+	space_info->reclaimable_bytes = max_t(s64, 0, space_info->reclaimable_bytes + bytes);
 
-	if (space_info->reclaimable_bytes > 0 &&
-	    space_info->reclaimable_bytes >= chunk_sz)
+	if (space_info->reclaimable_bytes >= chunk_sz)
 		btrfs_set_periodic_reclaim_ready(space_info, true);
 }
 
