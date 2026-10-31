@@ -27,6 +27,7 @@
 #include <linux/mempool.h>
 #include <crypto/acompress.h>
 #include <crypto/scatterwalk.h>
+#include <linux/wolos_bend.h>
 #include <linux/zswap.h>
 #include <linux/mm_types.h>
 #include <linux/page-flags.h>
@@ -1523,6 +1524,56 @@ compress_failed:
 	return false;
 }
 
+#ifdef CONFIG_WOLOS_BEND
+/* Compress folios of at least this many pages on idle CPUs (0: never). */
+static unsigned int wolos_par_min_pages;
+module_param(wolos_par_min_pages, uint, 0644);
+
+struct zswap_par {
+	struct folio *folio;
+	struct obj_cgroup *objcg;
+	struct zswap_pool *pool;
+	atomic_t failed;
+};
+
+static void zswap_par_fn(unsigned long s, unsigned long e, void *arg)
+{
+	struct zswap_par *p = arg;
+	unsigned int noreclaim = memalloc_noreclaim_save();
+
+	for (; s < e && !atomic_read(&p->failed); s++)
+		if (!zswap_store_page(p->folio, s, p->objcg, p->pool))
+			atomic_set(&p->failed, 1);
+	memalloc_noreclaim_restore(noreclaim);
+}
+
+/* Pages are independent: the folio lock keeps stores and loads away. */
+static bool zswap_store_folio_par(struct folio *folio, long nr_pages,
+				  struct obj_cgroup *objcg, struct zswap_pool *pool,
+				  bool *ok)
+{
+	struct zswap_par p = { .folio = folio, .objcg = objcg, .pool = pool };
+	struct bend_job job = {
+		.fn = zswap_par_fn, .arg = &p, .start = 0, .end = nr_pages,
+		.grain = 16, .max_workers = 8,
+	};
+	unsigned int min = READ_ONCE(wolos_par_min_pages);
+
+	if (!min || nr_pages < min || !bend_enabled())
+		return false;
+	bend_fork_join(&job);
+	*ok = !atomic_read(&p.failed);
+	return true;
+}
+#else
+static bool zswap_store_folio_par(struct folio *folio, long nr_pages,
+				  struct obj_cgroup *objcg, struct zswap_pool *pool,
+				  bool *ok)
+{
+	return false;
+}
+#endif
+
 bool zswap_store(struct folio *folio)
 {
 	long nr_pages = folio_nr_pages(folio);
@@ -1530,7 +1581,7 @@ bool zswap_store(struct folio *folio)
 	struct obj_cgroup *objcg = NULL;
 	struct mem_cgroup *memcg = NULL;
 	struct zswap_pool *pool;
-	bool ret = false;
+	bool ret = false, stored;
 	long index;
 
 	VM_WARN_ON_ONCE(!folio_test_locked(folio));
@@ -1565,9 +1616,14 @@ bool zswap_store(struct folio *folio)
 		mem_cgroup_put(memcg);
 	}
 
-	for (index = 0; index < nr_pages; ++index) {
-		if (!zswap_store_page(folio, index, objcg, pool))
+	if (zswap_store_folio_par(folio, nr_pages, objcg, pool, &stored)) {
+		if (!stored)
 			goto put_pool;
+	} else {
+		for (index = 0; index < nr_pages; ++index) {
+			if (!zswap_store_page(folio, index, objcg, pool))
+				goto put_pool;
+		}
 	}
 
 	if (objcg)
