@@ -2855,6 +2855,11 @@ config WOLOS_BEND_KUNIT_TEST
 	depends on KUNIT && WOLOS_BEND
 	default KUNIT_ALL_TESTS
 
+config WOLOS_MM_KUNIT_TEST
+	bool "KUnit test for WolKernel mm changes" if !KUNIT_ALL_TESTS
+	depends on KUNIT=y
+	default KUNIT_ALL_TESTS
+
 config WOLOS_POLICY_KUNIT_TEST
 	tristate "KUnit test for WolKernel policy decisions" if !KUNIT_ALL_TESTS
 	depends on KUNIT

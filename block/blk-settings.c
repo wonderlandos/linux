@@ -4,6 +4,8 @@
  */
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/moduleparam.h>
+#include <linux/sizes.h>
 #include <linux/init.h>
 #include <linux/bio.h>
 #include <linux/blk-integrity.h>
@@ -60,6 +62,17 @@ void blk_set_stacking_limits(struct queue_limits *lim)
 }
 EXPORT_SYMBOL(blk_set_stacking_limits);
 
+#undef MODULE_PARAM_PREFIX
+#define MODULE_PARAM_PREFIX "wolos_mm."
+
+/*
+ * Default readahead of non-rotational disks; 0: keep VM_READAHEAD_PAGES.
+ * read_ahead_kb in sysfs still overrides it per device.
+ */
+unsigned int blk_ssd_ra_kb __read_mostly = 2048;
+module_param_named(ssd_ra_kb, blk_ssd_ra_kb, uint, 0644);
+MODULE_PARM_DESC(ssd_ra_kb, "Default readahead of non-rotational disks (KiB, 0: 128)");
+
 void blk_apply_bdi_limits(struct backing_dev_info *bdi,
 		struct queue_limits *lim)
 {
@@ -78,6 +91,10 @@ void blk_apply_bdi_limits(struct backing_dev_info *bdi,
 	 */
 	if (!io_opt && (lim->features & BLK_FEAT_ROTATIONAL))
 		io_opt = (u64)lim->max_sectors << SECTOR_SHIFT;
+
+	/* RAM-backed disks (zram, pmem, brd) gain nothing from readahead. */
+	if (!(lim->features & (BLK_FEAT_ROTATIONAL | BLK_FEAT_SYNCHRONOUS)))
+		io_opt = max_t(u64, io_opt, (u64)READ_ONCE(blk_ssd_ra_kb) * SZ_1K / 2);
 
 	bdi->ra_pages = max3(bdi->ra_pages,
 				io_opt * 2 >> PAGE_SHIFT,
