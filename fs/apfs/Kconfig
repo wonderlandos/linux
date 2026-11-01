@@ -5,6 +5,7 @@ config APFS_FS
 	select LIBCRC32C
 	select CRC32
 	select ZLIB_INFLATE
+	select ZLIB_DEFLATE
 	help
 	  Read/write support for Apple File System volumes (Macs, iOS
 	  backups). Based on linux-apfs-rw by Ernesto A. Fernandez.

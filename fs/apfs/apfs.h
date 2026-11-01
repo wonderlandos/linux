@@ -87,6 +87,18 @@ struct apfs_ioctl_snap_name {
 #define APFS_IOC_GET_PFK	_IOR('@', 0x84, struct apfs_wrapped_crypto_state)
 #define APFS_IOC_TAKE_SNAPSHOT	_IOW('@', 0x85, struct apfs_ioctl_snap_name)
 
+/* Snapshot listing: ask on the mount point, get up to APFS_SNAP_LIST_MAX names with their xids */
+#define APFS_SNAP_LIST_MAX	32
+struct apfs_ioctl_snap_list {
+	__u32 count;		/* on return, number of entries filled in */
+	__u32 total;		/* on return, number of snapshots on the volume */
+	struct {
+		__u64 xid;
+		char name[APFS_SNAP_MAX_NAMELEN + 1];
+	} snap[APFS_SNAP_LIST_MAX];
+};
+#define APFS_IOC_LIST_SNAPSHOTS	_IOR('@', 0x86, struct apfs_ioctl_snap_list)
+
 /*
  * In-memory representation of an APFS object
  */
@@ -390,6 +402,8 @@ struct apfs_sb_info {
 	dev_t s_anon_dev; /* Anonymous device for this volume-snapshot */
 
 	char *s_tier2_path; /* Path to the tier 2 device */
+
+	u32 s_compress_algo; /* decmpfs type for new compressed files; 0 if off */
 
 	char *s_snap_name; /* Label for the mounted snapshot */
 	u64 s_snap_xid; /* Transaction id for mounted snapshot */
@@ -1025,6 +1039,8 @@ extern int apfs_dstream_get_new_bno(struct apfs_dstream_info *dstream, u64 dsblo
 extern int apfs_get_new_block(struct inode *inode, sector_t iblock,
 			      struct buffer_head *bh_result, int create);
 extern int apfs_truncate(struct apfs_dstream_info *dstream, loff_t new_size);
+extern int apfs_inode_drop_dstream(struct inode *inode);
+extern int apfs_compress_inode(struct inode *inode);
 extern int apfs_inode_delete_front(struct inode *inode);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0)
 extern loff_t apfs_remap_file_range(struct file *src_file, loff_t off, struct file *dst_file, loff_t destoff, loff_t len, unsigned int remap_flags);
@@ -1154,6 +1170,7 @@ extern u32 apfs_index_in_data_area(struct super_block *sb, u64 bno);
 extern u64 apfs_data_index_to_bno(struct super_block *sb, u32 index);
 
 /* snapshot.c */
+extern int apfs_ioc_list_snapshots(struct file *file, void __user *user_arg);
 extern int apfs_ioc_take_snapshot(struct file *file, void __user *user_arg);
 extern int apfs_switch_to_snapshot(struct super_block *sb);
 
@@ -1192,6 +1209,8 @@ extern int ____apfs_xattr_get(struct inode *inode, const char *name, void *buffe
 extern int __apfs_xattr_get(struct inode *inode, const char *name, void *buffer,
 			    size_t size);
 extern int apfs_delete_all_xattrs(struct inode *inode);
+extern int apfs_xattr_set_stream(struct inode *inode, const char *name, const void *value,
+				size_t size, int flags);
 extern int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 			  size_t size, int flags);
 extern ssize_t apfs_listxattr(struct dentry *dentry, char *buffer, size_t size);

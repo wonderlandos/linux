@@ -702,8 +702,8 @@ static int apfs_xattr_dstream_from_query(struct apfs_query *query, struct apfs_d
  *
  * Returns 0 on success, or a negative error code in case of failure.
  */
-int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
-		   size_t size, int flags)
+static int __apfs_xattr_set(struct inode *inode, const char *name, const void *value,
+			    size_t size, int flags, bool force_stream)
 {
 	struct super_block *sb = inode->i_sb;
 	struct apfs_sb_info *sbi = APFS_SB(sb);
@@ -716,7 +716,7 @@ int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
 	struct apfs_dstream_info *old_dstream = NULL;
 	int ret;
 
-	if (size > APFS_XATTR_MAX_EMBEDDED_SIZE) {
+	if (size > APFS_XATTR_MAX_EMBEDDED_SIZE || force_stream) {
 		dstream = apfs_create_xattr_dstream(sb, value, size);
 		if (IS_ERR(dstream)) {
 			apfs_err(sb, "failed to set xattr dstream for ino 0x%llx", apfs_ino(inode));
@@ -798,6 +798,18 @@ done:
 	kfree(raw_key);
 	apfs_free_query(query);
 	return ret;
+}
+
+int apfs_xattr_set(struct inode *inode, const char *name, const void *value,
+		   size_t size, int flags)
+{
+	return __apfs_xattr_set(inode, name, value, size, flags, false /* force_stream */);
+}
+
+/* Like apfs_xattr_set(), but the value always goes in its own data stream */
+int apfs_xattr_set_stream(struct inode *inode, const char *name, const void *value, size_t size, int flags)
+{
+	return __apfs_xattr_set(inode, name, value, size, flags, true /* force_stream */);
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 12, 0)

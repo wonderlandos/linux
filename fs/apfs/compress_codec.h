@@ -1,4 +1,4 @@
-﻿/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef _APFS_COMPRESS_CODEC_H
 #define _APFS_COMPRESS_CODEC_H
 
